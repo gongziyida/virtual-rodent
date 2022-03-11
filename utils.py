@@ -32,7 +32,7 @@ def make_env(arena, Task, walker=None, time_limit=30, random_state=None, **kwarg
 
     return env
 
-def simulate(env, policy, train=False, get_frame=False, cam_id=(0,), cam_size=(200, 200)):
+def simulate(env, model, train=False, get_frame=False, cam_id=(0,), cam_size=(200, 200)):
     start_time = time.time()
     res = dict([('cam%d'%i, []) for i in cam_id])
     res.update({'reward': [], 'discount': [], 'observation': []})
@@ -44,8 +44,8 @@ def simulate(env, policy, train=False, get_frame=False, cam_id=(0,), cam_size=(2
     while not time_step.last():
         counter += 1
 
-        # TODO: what function to call to generate action
-        action = policy.next()
+        # TODO: how to pass visual and proprioceptive inputs
+        action = model()
         time_step = env.step(action)
         returns['reward'].append(time_step.reward)
         returns['discount'].append(time_step.discount)
@@ -61,6 +61,8 @@ def simulate(env, policy, train=False, get_frame=False, cam_id=(0,), cam_size=(2
     res['runtime'] = end_time - start_time
     res['loops'] = counter
     return res
+
+########## Visualization ##########
 
 def display_video(frames, framerate=30, dpi=70):
     """ For IPython do the following on the return `anim`:
