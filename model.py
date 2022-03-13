@@ -57,4 +57,4 @@ class MerelModel(nn.Module):
 
     def sample_policy(self, pi, sample_size):
         dist = self.sampling_dist(pi, torch.tensor(1))
-        return dist.sample(sample_size)
+        return dist.sample([sample_size,])

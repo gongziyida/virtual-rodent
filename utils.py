@@ -45,7 +45,7 @@ def simulate(env, model, train=False, get_frame=False, cam_id=(0,), cam_size=(20
         counter += 1
 
         # TODO: how to pass visual and proprioceptive inputs
-        action = model()
+        value, action = model()
         time_step = env.step(action)
         returns['reward'].append(time_step.reward)
         returns['discount'].append(time_step.discount)
