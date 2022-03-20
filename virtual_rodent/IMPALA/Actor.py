@@ -23,7 +23,8 @@ class Actor(Process):
         PID = os.getpid()
         print('[%s] Setting env "%s" on EGL device %d' % (PID, self.env_name, self.EGL_ID))
         os.environ['EGL_DEVICE_ID'] = self.EGL_ID # dm_control/mujoco maps onto device EGL_DEVICE_ID
-        self.env = importlib.import_module(MAPPER[self.env_name])
+        env_constructor = importlib.import_module(MAPPER[self.env_name])
+        self.env = env_constructor()
         print('[%s] Simulating on env "%s"' % (PID, self.env_name))
         with torch.no_grad():
             while self.exit.value == 0:
