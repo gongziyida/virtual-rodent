@@ -26,7 +26,7 @@ class ResNet18_Enc(nn.Module):
 
         self.enc = nn.Sequential(*list(models.resnet18(pretrained=pretrained).children())[:-1])
         with torch.no_grad():
-            self.in_dim, self.out_dim = in_dim, self.enc(torch.rand(*in_dim)).data.shape) # (input_dim, output_dim)
+            self.in_dim, self.out_dim = in_dim, self.enc(torch.rand(*in_dim)).data.shape # (input_dim, output_dim)
 
     def forward(self, x):
         return self.enc(x)

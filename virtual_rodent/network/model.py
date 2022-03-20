@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from .helper import check_network
 
 class MerelModel(nn.Module):
     def __init__(self, visual_enc, visual_dim, propri_enc, propri_dim, action_dim, core_hidden_dim,

@@ -1,2 +1,5 @@
-env/
 .ipynb_checkpoints
+__pycache__
+dm_control
+activate_environment.sh
+data

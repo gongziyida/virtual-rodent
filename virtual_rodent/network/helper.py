@@ -8,7 +8,12 @@ class VAE(nn.Module):
         self.dec = dec
 
     def forward(self, x):
-        mu, var = self.enc(x)
+        ret = self.enc(x)
+        if len(ret) == 2:
+            mu, var = ret
+        else:
+            mid = ret.shape[-1]//2
+            mu, var = ret[..., :mid], ret[..., mid:]
         z = mu + var * torch.randn_like(var)
         x_hat = self.dec(z)
         return x_hat

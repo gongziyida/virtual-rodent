@@ -1,87 +1,11 @@
 import time
-
-from dm_control import composer
-from dm_control.locomotion.walkers import rodent
+import numpy as np
+import torch
 
 # Visualization
 import matplotlib
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
-
-_CTRL_DT = .02
-_PHYS_DT = 0.001
-
-"""
-appendages_pos (15): head and 4 paw positions, projected to egocentric frame, and reshaped to 1D
-joints_pos/vel (30): angle and angular velocity of the 1D hinge joints
-tendons_pos/vel (8): extension and extension velocity of the 1D tendons
-sensors_accelerometer/velocimeter/gyro (3): Acceleration/velocity/angular velocity of the body
-world_zaxis (3): the world's z-vector (-gravity) in this Walker's torso frame
-sensors_touch (4): touch sensors (forces) in the 4 paws
-"""
-PROPRIOCEPTION_ATTRIBUTES = ['appendages_pos', 'joints_pos', 'joints_vel', 'tendons_pos', 'tendons_vel',
-                             'sensors_accelerometer', 'sensors_velocimeter', 'sensors_gyro',
-                             'sensors_touch', 'world_zaxis']
-
-def make_env(arena, Task, walker=None, time_limit=30, random_state=None, **kwargs):
-    """
-        Parameters
-        ----------
-        arena: dm_control.composer.Arena
-        Task: function
-            constructor that returns dm_control.composer.Task
-
-    """
-    if walker is None: # Build a position-controlled rodent walker
-        walker = rodent.Rat(observable_options={'egocentric_camera': dict(enabled=True)})
-    
-    # Build task
-    task = Task(walker, arena, physics_timestep=_PHYS_DT, control_timestep=_CTRL_DT, **kwargs)
-
-    # Build environment
-    env = composer.Environment(task, time_limit=time_limit, random_state=random_state, 
-                               strip_singleton_obs_buffer_dim=True)
-
-    return env
-
-
-def get_proprioception(observation):
-    ret = []
-    for pa in PROPRIOCEPTION_ATTRIBUTES:
-        ret.append(observation['walker/' + pa])
-    return np.concatenate(ret)
-
-
-def simulate(env, model, train=False, get_frame=False, cam_id=(0,), cam_size=(200, 200)):
-    start_time = time.time()
-    res = dict([('cam%d'%i, []) for i in cam_id])
-    res.update({'reward': [], 'discount': [], 'observation': []})
-
-    # Step through the environment for one episode with random actions.
-    time_step = env.reset()
-
-    counter = 0
-    while not time_step.last():
-        counter += 1
-
-        # TODO: how to pass visual and proprioceptive inputs
-        value, action = model()
-        time_step = env.step(action)
-        returns['reward'].append(time_step.reward)
-        returns['discount'].append(time_step.discount)
-        returns['observation'].append(time_step.observation)
-        if get_frame:
-            for i in range(len(canera_id)):
-                cam = env.physics.render(camera_id=cam_id[i], height=cam_size[0], width=cam_size[1])
-                returns['cam%d'%i].append(cam)
-        if train: # TODO: implement training
-            pass
-
-    end_time = time.time()
-    res['runtime'] = end_time - start_time
-    res['loops'] = counter
-    return res
-
 
 def save_checkpoint(model, epoch, save_path, optimizer=None):
     d = {'model_state_dict': model.state_dict(), 'epoch': epoch}
