@@ -10,7 +10,7 @@ class Actor(Process):
         super().__init__()
         # Constants
         self.EGL_ID = EGL_ID
-        self.max_step = max_step
+        self.max_step = max_step # The final length is max_step + 1 
         self.device = torch.device('cuda:%d' % EGL_ID) 
         # Shared resources
         self.queue = queue
@@ -21,18 +21,20 @@ class Actor(Process):
 
     def run(self):
         PID = os.getpid()
-        print('[%s] Setting env "%s" on EGL device %d' % (PID, self.env_name, self.EGL_ID))
-        os.environ['EGL_DEVICE_ID'] = self.EGL_ID # dm_control/mujoco maps onto device EGL_DEVICE_ID
-        env_constructor = importlib.import_module(MAPPER[self.env_name])
-        self.env = env_constructor()
-        print('[%s] Simulating on env "%s"' % (PID, self.env_name))
+        print('\n[%s] Setting env "%s" on EGL device %d' % (PID, self.env_name, self.EGL_ID))
+        os.environ['EGL_DEVICE_ID'] = str(self.EGL_ID) # dm_control/mujoco maps onto EGL_DEVICE_ID
+        self.env = MAPPER[self.env_name]()
+        print('\n[%s] Simulating on env "%s"' % (PID, self.env_name))
+        from virtual_rodent.simulation import simulator
+
         with torch.no_grad():
             while self.exit.value == 0:
                 local_buffer = []
-                model = self.model.to(device)
+                model = self.model.to(self.device)
 
-                for i, ret in simulator(env, model, device):
+                for i, ret in simulator(self.env, model, self.device):
                     local_buffer.append(ret)
-                    if i == self.max_step or self.exit.value == 0:
-                        self.queue.put(local_buffer)
+                    if i == self.max_step:
+                        if self.exit.value == 0:
+                            self.queue.put(local_buffer)
                         break

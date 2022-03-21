@@ -1,4 +1,5 @@
 import time
+import numpy as np
 import torch
 
 from dm_control import composer
@@ -41,11 +42,16 @@ def make_env(arena, Task, walker=None, time_limit=30, random_state=None, **kwarg
     return env
 
 
-def get_proprioception(observation):
+def get_proprioception(time_step):
     ret = []
     for pa in PROPRIOCEPTION_ATTRIBUTES:
-        ret.append(observation['walker/' + pa])
-    return np.concatenate(ret)
+        ret.append(time_step.observation['walker/' + pa])
+    return np.concatenate(ret).astype(np.float32)
+
+def get_vision(time_step):
+    vis = np.moveaxis(time_step.observation['walker/egocentric_camera'], -1, 0) # Channel as axis 0
+    vis = vis.astype(np.float32) / 255
+    return vis
 
 
 def simulate(env, model, stop_criteron, device, reset=True, time_step=None,
@@ -67,12 +73,12 @@ def simulate(env, model, stop_criteron, device, reset=True, time_step=None,
     stop = False
     while not stop:
         # Get state, reward and discount
-        vision = torch.from_numpy(time_step.observation['walker/egocentric_camera']).to(device)
-        proprioception = torch.from_numpy(get_proprioception(time.observation)).to(device)
+        vision = torch.from_numpy(get_vision(time_step)).to(device)
+        proprioception = torch.from_numpy(get_proprioception(time_step)).to(device)
         reward = time_step.reward
         discount = time_step.discount
         
-        value, action = self.model(vision, proprioception) # Act
+        value, action = model(vision, proprioception) # Act
 
         returns['vision'].append(vision)
         returns['proprioception'].append(proprioception)
@@ -108,8 +114,8 @@ def simulator(env, model, device,
     step = 0
     while True:
         # Get state, reward and discount
-        vision = torch.from_numpy(time_step.observation['walker/egocentric_camera']).to(device)
-        proprioception = torch.from_numpy(get_proprioception(time.observation)).to(device)
+        vision = torch.from_numpy(get_vision(time_step)).to(device)
+        proprioception = torch.from_numpy(get_proprioception(time_step)).to(device)
         reward = time_step.reward
         discount = time_step.discount
         
@@ -129,7 +135,7 @@ def simulator(env, model, device,
             time_step = env.reset()
             assert not time_step.last()
         else:
-            value, action = self.model(vision, proprioception) # Act
+            value, action = model(vision, proprioception) # Act
             returns['action'] = action
             time_step = env.step(action.cpu().detach().numpy())
         

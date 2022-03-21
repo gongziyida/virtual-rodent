@@ -1,5 +1,5 @@
 import time
-from tqdm import tqdm
+from queue import Empty # Exception
 import torch
 from torch.multiprocessing import Process
 
@@ -23,16 +23,20 @@ class Learner(Process):
 
 
     def run(self):
-        time.sleep(1) # Wait for the simulators to init and gather some samples
-        for episode in tqdm(range(episodes)):
+        time.sleep(10) # Wait for the simulators to init and gather some samples
+        for episode in range(self.episodes):
             n_batch = 0
             # Get enough samples before proceeding to train
             while n_batch < self.batch_size:
                 try:
-                    print(n_batch, self.queue.get(timeout=1))
+                    x = self.queue.get(timeout=1)
+                    # TODO: map each of x to current device
+                    print(n_batch, len(x))
+                    del x
                     n_batch += 1
                 except Empty:
                     pass
+            print('Episode %d' % episode)
             # if episode % self.save_every == 0 and episode > 0:
                 # save_checkpoint(self.model, episode)
 

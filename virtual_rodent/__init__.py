@@ -1,3 +1,3 @@
-import virtual_rodent.network
-import virtual_rodent.rl
-import virtual_rodent.utils
+VISUAL_DIM = (3, 64, 64)
+PROPRI_DIM = 107
+ACTION_DIM = 38

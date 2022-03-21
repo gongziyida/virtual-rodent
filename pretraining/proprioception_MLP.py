@@ -10,8 +10,9 @@ from torch.utils.tensorboard import SummaryWriter
 
 from dm_control.locomotion.examples import basic_rodent_2020
 
-from virtual_rodent.utils import get_proprioception, save_checkpoint, load_checkpoint
+from virtual_rodent.utils import save_checkpoint, load_checkpoint
 from virtual_rodent.network import VAE, MLP, MLPMirror
+from virtual_rodent.simulation import get_proprioception
 
 _device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -67,7 +68,7 @@ if __name__ == '__main__':
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=True)
 
-    propri_dim = train_set.tensors[0].shape[1]
+    propri_dim = train_set.tensors[0].shape[1] # 107
     propri_emb_dim = 16
 
     model = VAE(enc=MLP(propri_dim, propri_emb_dim), dec=MLPMirror(propri_emb_dim//2, propri_dim))
