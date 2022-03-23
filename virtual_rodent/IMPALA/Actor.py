@@ -10,7 +10,7 @@ class Actor(Process):
         super().__init__()
         # Constants
         self.EGL_ID = EGL_ID
-        self.max_step = max_step # The final length is max_step + 1 
+        self.max_step = max_step 
         self.device = torch.device('cuda:%d' % EGL_ID) 
         # Shared resources
         self.queue = queue
@@ -29,12 +29,18 @@ class Actor(Process):
 
         with torch.no_grad():
             while self.exit.value == 0:
-                local_buffer = []
                 model = self.model.to(self.device)
 
-                for i, ret in simulator(self.env, model, self.device):
-                    local_buffer.append(ret)
-                    if i == self.max_step:
-                        if self.exit.value == 0:
-                            self.queue.put(local_buffer)
+                for i, ret in simulator(self.env, model, self.device): # Restart simulation
+                    if i == 0: # Init buffer
+                        local_buffer = {k: [] for k in ret.keys()}
+
+                    for k in local_buffer.keys(): 
+                        local_buffer[k].append(ret[k])
+
+                    if i == self.max_step and self.exit.value == 0: # Share
+                        for k in local_buffer.keys(): # Stack list of tensor
+                            if torch.is_tensor(local_buffer[k][0]):
+                                local_buffer[k] = torch.stack(local_buffer[k], dim=0)
+                        self.queue.put(local_buffer)
                         break

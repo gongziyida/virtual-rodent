@@ -116,13 +116,9 @@ def simulator(env, model, device,
         # Get state, reward and discount
         vision = torch.from_numpy(get_vision(time_step)).to(device)
         proprioception = torch.from_numpy(get_proprioception(time_step)).to(device)
-        reward = time_step.reward
-        discount = time_step.discount
-        
+
         returns['vision'] = vision
         returns['proprioception'] = proprioception
-        returns['reward'] = reward
-        returns['discount'] = discount
         returns['done'] = time_step.last()
         if ext_cam: # Record external camera
             for i in range(len(canera_id)):
@@ -130,14 +126,17 @@ def simulator(env, model, device,
                         height=ext_cam_size[0], width=ext_cam_size[1])
                 returns['cam%d'%i] = cam
 
-        if time_step.last():
-            returns['action'] = torch.zeros_like(action)
+        if time_step.last(): 
             time_step = env.reset()
             assert not time_step.last()
         else:
-            value, action = model(vision, proprioception) # Act
+            _, pi = model(vision, proprioception) # Act; return value and distribution pi
+            action = pi.sample()
             returns['action'] = action
-            time_step = env.step(action.cpu().detach().numpy())
-        
+            log_behavior_policy = pi.log_prob(action)
+            returns['log behavior policy'] = log_behavior_policy 
+            time_step = env.step(action.detach().cpu().squeeze().numpy())
+            returns['reward'] = torch.tensor(time_step.reward)
+
         yield step, returns
         step += 1
