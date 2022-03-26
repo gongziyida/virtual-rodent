@@ -1,4 +1,4 @@
-import os
+import os, time
 import torch
 from torch.multiprocessing import Queue, Value, set_start_method
 
@@ -9,20 +9,18 @@ set_start_method('spawn', force=True)
 _N_CUDA = torch.cuda.device_count()
 
 class IMPALA:
-    def __init__(self, env, model, save_dir, max_step, max_episode):
-        """
+    def __init__(self, env_name, model, save_dir, max_step, max_episode):
+        """ Multi-actor-single-learner IMPALA in Pytorch
         parameters
         ----------
-        env: list of str
+        env_name: list of str
             list of the name of environment
             The number of environments determine the number of actors (processes)
         model: nn.Module
             model does not need to be on CUDA. It will be handled in the method
-        T: float
-            Maximum time to run the simulation
         """
-        self.env = env
-        self.model = model
+        self.env_name = env_name
+        self.model = model.to('cuda:%d' % (_N_CUDA - 1))
         self.save_dir = save_dir
         self.max_step = max_step
         self.max_episode = max_episode
@@ -35,9 +33,11 @@ class IMPALA:
         # Processes
         self._actors = [Actor(i%n_cuda_actor, self._sample_queue, self._training_done, 
                               model, env_i, max_step)
-                for i, env_i in enumerate(env)]
-        self._learner = Learner(_N_CUDA - 1, self._sample_queue, self._training_done, model, 
-                                max_episode, save_dir)
+                        for i, env_i in enumerate(env_name)]
+
+        self._learner = Learner(_N_CUDA - 1, self._sample_queue, self._training_done, 
+                                model=self.model, episodes=max_episode, p_hat=2, c_hat=1, 
+                                save_dir=save_dir)
 
     def __call__(self):
        # simulate (no grad)
@@ -47,6 +47,7 @@ class IMPALA:
 
         self._learner.join()
 
+        # TODO: Check if and why simulation does not terminate
         for actor in self._actors:
             actor.join()
 

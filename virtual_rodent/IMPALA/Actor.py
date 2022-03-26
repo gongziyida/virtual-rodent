@@ -29,16 +29,19 @@ class Actor(Process):
 
         with torch.no_grad():
             while self.exit.value == 0:
-                model = self.model.to(self.device)
+                model = self.model.to(self.device) # Need disabling CPU binding
 
                 for i, ret in simulator(self.env, model, self.device): # Restart simulation
+                    if self.exit.value == 1:
+                        break
+
                     if i == 0: # Init buffer
                         local_buffer = {k: [] for k in ret.keys()}
 
                     for k in local_buffer.keys(): 
                         local_buffer[k].append(ret[k])
 
-                    if i == self.max_step and self.exit.value == 0: # Share
+                    if i == self.max_step: # Share
                         for k in local_buffer.keys(): # Stack list of tensor
                             if torch.is_tensor(local_buffer[k][0]):
                                 local_buffer[k] = torch.stack(local_buffer[k], dim=0)

@@ -86,7 +86,7 @@ def simulate(env, model, stop_criteron, device, reset=True, time_step=None,
         returns['reward'].append(reward)
         returns['discount'].append(discount)
 
-        time_step = env.step(action.cpu().detach().numpy())
+        time_step = env.step(np.tanh(action.detach().cpu().numpy()))
         
         if ext_cam: # Record external camera
             for i in range(len(canera_id)):
@@ -116,9 +116,19 @@ def simulator(env, model, device,
         # Get state, reward and discount
         vision = torch.from_numpy(get_vision(time_step)).to(device)
         proprioception = torch.from_numpy(get_proprioception(time_step)).to(device)
+        reward = time_step.reward
 
+        _, pi, _ = model(vision, proprioception) # Act; return value and distribution pi
+        action = pi.sample()
+        log_behavior_policy = pi.log_prob(action)
+        time_step = env.step(np.tanh(action.detach().cpu().numpy()))
+
+        # Record state t, action t, reward t and done t+1; reward at start is 0
         returns['vision'] = vision
         returns['proprioception'] = proprioception
+        returns['action'] = action
+        returns['log behavior policy'] = log_behavior_policy 
+        returns['reward'] = torch.tensor(0 if reward is None else reward)
         returns['done'] = time_step.last()
         if ext_cam: # Record external camera
             for i in range(len(canera_id)):
@@ -126,17 +136,10 @@ def simulator(env, model, device,
                         height=ext_cam_size[0], width=ext_cam_size[1])
                 returns['cam%d'%i] = cam
 
+        yield step, returns
+        step += 1
+
         if time_step.last(): 
             time_step = env.reset()
             assert not time_step.last()
-        else:
-            _, pi = model(vision, proprioception) # Act; return value and distribution pi
-            action = pi.sample()
-            returns['action'] = action
-            log_behavior_policy = pi.log_prob(action)
-            returns['log behavior policy'] = log_behavior_policy 
-            time_step = env.step(action.detach().cpu().squeeze().numpy())
-            returns['reward'] = torch.tensor(time_step.reward)
 
-        yield step, returns
-        step += 1
