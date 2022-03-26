@@ -1,4 +1,5 @@
 import os, time
+from tqdm import tqdm
 from queue import Empty # Exception
 import torch
 import torch.nn as nn
@@ -11,7 +12,7 @@ _ATTRIBUTES = ('vision', 'proprioception', 'action', 'log behavior policy', 'rew
 class Learner(Process):
     def __init__(self, EGL_ID, queue, training_done, model, episodes, p_hat, c_hat, save_dir,
                  discount=0.99, entropy_bonus=True, clip_gradient=40, batch_size=3, 
-                 policy_weight=1, value_weight=1, entropy_weight=1e-2, save_every=None):
+                 policy_weight=1, value_weight=1, entropy_weight=1e-2, save_window=None):
         super().__init__()
         # Constants
         self.EGL_ID = EGL_ID
@@ -23,7 +24,7 @@ class Learner(Process):
         self.policy_weight = policy_weight
         self.value_weight = value_weight
         self.entropy_weight = entropy_weight
-        self.save_every = max(episodes//10, 2) if save_every is None else save_every
+        self.save_window = max(episodes//50, 2) if save_window is None else save_window
         self.save_dir = save_dir
         self.batch_size = batch_size
         self.batch_cache = Cache(max_len=batch_size*2)
@@ -83,16 +84,18 @@ class Learner(Process):
 
 
     def run(self):
+        PID = os.getpid()
+        print('[%s] Training...' % PID)
         stats = {'total_loss': [], 'sum_rewards': [], 'sum_vtrace': [],
                 'policy_loss': [], 'policy_weight': self.policy_weight, 
                 'value_loss': [], 'value_weight': self.value_weight, 
                 'entropy': [], 'entropy_weight': self.entropy_weight
                 }
-        for episode in range(self.episodes):
+        for episode in tqdm(range(self.episodes)):
             # (T+1 or T, batch, ...) for tensors, (batch)(T+1 or T)(...) for lists
             batch = self.fetch_batch()
 
-            print('Episode %d' % episode) 
+            # print('Episode %d' % episode) 
             
             self.optimizer.zero_grad()
 
@@ -128,18 +131,23 @@ class Learner(Process):
                 nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_gradient)
 
             self.optimizer.step()
+            self.model._update_episode()
+            print('[%s]' % PID, self.model._episode.data)
             
-            stats['sum_rewards'].append(rewards.sum())
-            stats['sum_vtrace'].append(vtrace.sum())
+            stats['sum_rewards'].append(rewards.sum().item())
+            stats['sum_vtrace'].append(vtrace.sum().item())
             stats['total_loss'].append(total_loss.item())
             stats['policy_loss'].append(policy_loss.item())
             stats['value_loss'].append(value_loss.item())
             if self.entropy_bonus: # Optional entropy bonus
                 stats['entropy'].append(entropy.item())
-                
-            if (episode + 1) % self.save_every == 0 or episode == self.episodes - 1:
-                save_checkpoint(self.model, episode + 1, 
-                                os.path.join(self.save_dir, 'model%d.pt'%episode))
+            
+            if episode + 1 >= self.save_window: # Save the model if not the worst in this period
+                if stats['total_loss'][-1] == min(stats['total_loss'][-self.save_window:]):
+                    save_checkpoint(self.model, episode + 1, 
+                                    os.path.join(self.save_dir, 'model%d.pt'%(episode+1)))
+            if (episode + 1) % 100 == 0 or episode == self.episodes - 1:
+                # Update the stats periodically
                 torch.save(stats, os.path.join(self.save_dir, 'training_stats.pt'))
 
         with self.training_done.get_lock():

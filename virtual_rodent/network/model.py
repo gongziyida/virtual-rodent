@@ -37,6 +37,7 @@ def iter_over_batch_with_reset(rnn, rnn_input, reset_idx):
     assert out.shape[0] == rnn_input.shape[0] and out.shape[1] == rnn_input.shape[1]
     return out
 
+
 class MerelModel(nn.Module):
     def __init__(self, visual_enc, propri_enc, core_hidden_dim,
                  sampling_dist=torch.distributions.Normal):
@@ -60,6 +61,8 @@ class MerelModel(nn.Module):
         self.policy = nn.LSTM(self.policy_in_dim, ACTION_DIM, num_layers=3, batch_first=False)
 
         self.sampling_dist = sampling_dist
+
+        self._episode = nn.Parameter(torch.tensor(-1.0), requires_grad=False) # -1: init version
 
     def forward(self, visual, propri, done=None):
         """
@@ -114,3 +117,9 @@ class MerelModel(nn.Module):
             policy_out = policy_out.squeeze()
         pi = self.sampling_dist(policy_out, torch.tensor(1).to(policy_out.device))
         return value, pi, reset_idx
+
+    def _reset_episode(self): # For testing
+        self._episode *= 0
+        self._episode -= 1
+    def _update_episode(self, val=1): # For testing
+        self._episode += val

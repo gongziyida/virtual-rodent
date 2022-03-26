@@ -45,9 +45,16 @@ class IMPALA:
             actor.start()
         self._learner.start()
 
+        while self._sample_queue.empty():
+            time.sleep(0.1)
+
         self._learner.join()
 
-        # TODO: Check if and why simulation does not terminate
+        if self._training_done.value != 1:
+            print('Learner terminated with error')
+            with self._training_done.get_lock():
+                self._training_done.value = 1
+
         for actor in self._actors:
             actor.join()
 

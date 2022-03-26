@@ -30,6 +30,7 @@ class Actor(Process):
         with torch.no_grad():
             while self.exit.value == 0:
                 model = self.model.to(self.device) # Need disabling CPU binding
+                print('[%s]' % PID, model._episode.data)
 
                 for i, ret in simulator(self.env, model, self.device): # Restart simulation
                     if self.exit.value == 1:
