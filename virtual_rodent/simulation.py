@@ -2,11 +2,6 @@ import time
 import numpy as np
 import torch
 
-from dm_control import composer
-from dm_control.locomotion.walkers import rodent
-
-_CTRL_DT = .02
-_PHYS_DT = 0.001
 
 """
 appendages_pos (15): head and 4 paw positions, projected to egocentric frame, and reshaped to 1D
@@ -19,28 +14,6 @@ sensors_touch (4): touch sensors (forces) in the 4 paws
 PROPRIOCEPTION_ATTRIBUTES = ['appendages_pos', 'joints_pos', 'joints_vel', 'tendons_pos', 'tendons_vel',
                              'sensors_accelerometer', 'sensors_velocimeter', 'sensors_gyro',
                              'sensors_touch', 'world_zaxis']
-
-def make_env(arena, Task, walker=None, time_limit=30, random_state=None, **kwargs):
-    """
-        Parameters
-        ----------
-        arena: dm_control.composer.Arena
-        Task: function
-            constructor that returns dm_control.composer.Task
-
-    """
-    if walker is None: # Build a position-controlled rodent walker
-        walker = rodent.Rat(observable_options={'egocentric_camera': dict(enabled=True)})
-    
-    # Build task
-    task = Task(walker, arena, physics_timestep=_PHYS_DT, control_timestep=_CTRL_DT, **kwargs)
-
-    # Build environment
-    env = composer.Environment(task, time_limit=time_limit, random_state=random_state, 
-                               strip_singleton_obs_buffer_dim=True)
-
-    return env
-
 
 def get_proprioception(time_step):
     ret = []
@@ -79,7 +52,6 @@ def simulate(env, model, stop_criteron, device, reset=True, time_step=None,
         proprioception = torch.from_numpy(get_proprioception(time_step)).to(device)
         reward = time_step.reward
 
-        # Return value and distribution pi
         _, pi, _ = model(vision, proprioception, [[step == 0, False]]) 
         action = pi.sample()
         log_policy = pi.log_prob(action)

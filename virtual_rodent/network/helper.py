@@ -54,17 +54,20 @@ def fetch_reset_idx(done, T, batch):
         reset_idx.append(li)
     return reset_idx
 
-def iter_over_batch_with_reset(rnn, rnn_input, reset_idx, rnn_hc):
+def iter_over_batch_with_reset(rnn, rnn_input, reset_idx, rnn_hc_init):
     out, hc = [], []
+    if rnn_hc_init is not None: assert len(rnn_hc_init) == len(reset_idx)
     for i, idx in enumerate(reset_idx):
         li = []
         for j in range(len(idx)):
             # Note: LSTM hidden layers initiated to zero if not provided
             if j == 0 and idx[j] != 0:  
-                if rnn_hc is None: # First run
+                if rnn_hc_init is None: # First run
                     rnn_out, rnn_hc = rnn(rnn_input[:idx[j], i:i+1])
                 else: # Continue from last time
-                    rnn_out, rnn_hc = rnn(rnn_input[:idx[j], i:i+1], rnn_hc[i])
+                    assert len(rnn_hc_init[i]) == 2
+                    assert type(rnn_hc_init[i]) is tuple
+                    rnn_out, rnn_hc = rnn(rnn_input[:idx[j], i:i+1], rnn_hc_init[i])
             elif j != len(idx) - 1: # reset
                 rnn_out, rnn_hc = rnn(rnn_input[idx[j]:idx[j+1], i:i+1])
             else: # The last one is always T, do nothing

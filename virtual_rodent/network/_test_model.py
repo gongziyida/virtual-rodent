@@ -75,7 +75,7 @@ class TestModel(nn.Module):
         self.core_hc = None
         self.policy_hc = None
 
-    def forward(self, visual, propri, done=None):
+    def forward(self, visual, propri, done):
         """
         Parameters
         ----------
