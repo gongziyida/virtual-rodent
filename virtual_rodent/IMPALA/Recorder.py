@@ -25,16 +25,20 @@ class Recorder(Process):
         # Environment name; instantiate when started
         self.env_name = env_name
 
-    def run(self):
-        PID = os.getpid()
-        print('\n[%s] Setting env "%s" on %s' % (PID, self.env_name, self.device))
-        if self.DEVICE_ID == 'cpu':
-            os.environ['MUJOCO_GL'] = 'osmesa'
-        else: # dm_control/mujoco maps onto EGL_DEVICE_ID
-            os.environ['MUJOCO_GL'] = 'egl'
-            os.environ['EGL_DEVICE_ID'] = str(self.DEVICE_ID) 
+    def set_env(self):
+        self.PID = os.getpid()
+
+        os.environ['MUJOCO_GL'] = 'egl'
+        os.environ['EGL_DEVICE_ID'] = str(self.DEVICE_ID) 
+
+        print('\n[%s] Setting env "%s" on %s with %s' % \
+                (self.PID, self.env_name, self.device, os.environ['MUJOCO_GL']))
         self.env = MAPPER[self.env_name]()
-        print('\n[%s] Simulating on env "%s" for recording' % (PID, self.env_name))
+        print('\n[%s] Simulating on env "%s" for recording' % (self.PID, self.env_name))
+
+
+    def run(self):
+        self.set_env()
         if str(os.environ['SIMULATOR_IMPALA']) == 'rodent':
             from virtual_rodent.simulation import simulate
         elif str(os.environ['SIMULATOR_IMPALA']) == 'hop_simple':
@@ -49,7 +53,9 @@ class Recorder(Process):
             ext_cam_size = self.simulator_params.get('ext_cam_size', (200, 200))
             for i in ext_cam_id:
                 anim = video(ret['cam%d'%i])
-                anim.save(os.path.join(self.save_dir, '%s_%s_cam%d.mp4' % (self.env_name, PID, i)))
+                fname = '%s_%s_cam%d.mp4' % (self.env_name, self.PID, i)
+                anim.save(os.path.join(self.save_dir, fname))
 
         if self.save_full_record:
-            torch.save(ret, os.path.join(self.save_dir, '%s_%s_records.pt' % (self.env_name, PID)))
+            fname = '%s_%s_records.pt' % (self.env_name, self.PID)
+            torch.save(ret, os.path.join(self.save_dir, fname))

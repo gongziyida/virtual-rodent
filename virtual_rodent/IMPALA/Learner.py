@@ -39,8 +39,7 @@ class Learner(Process):
             self.model = model.to(self.device)
             self.batch_size = batch_size
 
-        self.best_loss = 0
-        self.last_saved = 0
+        self.last_saved = time.time()
 
         # Shared resources
         self.queue = queue
@@ -175,11 +174,8 @@ class Learner(Process):
         del self.batch_cache # Free the storage of variables from the producers
 
     def save(self, stats, episode):
-        # Save the model if it's good
-        if (stats['total_loss'][-1] <= self.best_loss and episode - self.last_saved > 1000) \
-        or (episode - self.last_saved > self.episodes//10):
-            self.best_loss = stats['total_loss'][-1]
-            self.last_saved = episode
+        t = time.time() - self.last_saved
+        if (t > 1200) or (episode % (self.episodes//10) == 0) or (episode == self.episodes - 1):
             save_checkpoint(self.model, episode, os.path.join(self.save_dir, 'model.pt'))
 
         if (episode + 1) % (self.episodes//10) == 0 or episode == self.episodes - 1:

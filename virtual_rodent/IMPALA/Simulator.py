@@ -96,6 +96,6 @@ class Simulator(Process):
             for k in local_buffer.keys(): # Stack list of tensor
                 if k != 'done':
                     local_buffer[k] = torch.stack(local_buffer[k], dim=0)
-            if self.exit.value == 0:
-                self.sample_queue.put(local_buffer)
+
+            self.sample_queue.put(local_buffer)
 

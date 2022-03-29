@@ -65,6 +65,8 @@ def simulate(env, model, stop_criteron, device, reset=True, time_step=None,
     
     if reset:
         time_step = env.reset()
+        if hasattr(model, 'reset_rnn'):
+            model.reset_rnn()
     else:
         if time_step is None:
             raise ValueError('`time_step` must be given if not reset.')
@@ -77,7 +79,8 @@ def simulate(env, model, stop_criteron, device, reset=True, time_step=None,
         proprioception = torch.from_numpy(get_proprioception(time_step)).to(device)
         reward = time_step.reward
 
-        _, pi, _ = model(vision, proprioception) # Act; return value and distribution pi
+        # Return value and distribution pi
+        _, pi, _ = model(vision, proprioception, [[step == 0, False]]) 
         action = pi.sample()
         log_policy = pi.log_prob(action)
         time_step = env.step(np.tanh(action.detach().cpu().numpy()))
@@ -109,19 +112,23 @@ def simulator(env, model, device,
     """
     time_step = env.reset()
     assert not time_step.last()
+    if hasattr(model, 'reset_rnn'):
+        model.reset_rnn()
     returns = dict()
     
     step = 0
+    done = True
     while True:
         # Get state, reward and discount
         vision = torch.from_numpy(get_vision(time_step)).to(device)
         proprioception = torch.from_numpy(get_proprioception(time_step)).to(device)
         reward = time_step.reward
 
-        _, pi, _ = model(vision, proprioception) # Act; return value and distribution pi
+        _, pi, _ = model(vision, proprioception, [[done, False]]) 
         action = pi.sample()
         log_behavior_policy = pi.log_prob(action)
         time_step = env.step(np.tanh(action.detach().cpu().numpy()))
+        done = time_step.last()
 
         # Record state t, action t, reward t and done t+1; reward at start is 0
         returns['vision'] = vision
@@ -129,7 +136,7 @@ def simulator(env, model, device,
         returns['action'] = action
         returns['log_policy'] = log_behavior_policy 
         returns['reward'] = torch.tensor(0 if reward is None else reward)
-        returns['done'] = time_step.last()
+        returns['done'] = done
         if ext_cam: # Record external camera
             for i in range(len(ext_cam_id)):
                 cam = env.physics.render(camera_id=ext_cam_id[i], 
@@ -139,7 +146,7 @@ def simulator(env, model, device,
         yield step, returns
         step += 1
 
-        if time_step.last(): 
+        if done: 
             time_step = env.reset()
             assert not time_step.last()
 

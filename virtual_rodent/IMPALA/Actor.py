@@ -29,9 +29,6 @@ class Actor(Process):
             self.action_traffic[i][INPUT_GIVEN].wait()
             self.action_traffic[i][INPUT_GIVEN].clear()
 
-            if self.exit.value == 1:
-                return
-
             inputs = self.action_traffic[i][QUEUE].get()
             vision.append(inputs[0])
             proprioception.append(inputs[1])
@@ -47,8 +44,6 @@ class Actor(Process):
 
     def send_action(self, actions, log_policies):
         for i in range(self.batch_size): 
-            if self.exit.value == 1:
-                return
             assert actions.shape[0] == 1 and log_policies.shape[0] == 1
             self.action_traffic[i][QUEUE].put((actions[0, i], log_policies[0, i]))
             self.action_traffic[i][ACTION_MADE].set()
@@ -66,8 +61,6 @@ class Actor(Process):
                 step += 1
 
                 vision, proprioception, done = self.fetch_input()
-                if self.exit.value == 1:
-                    return
 
                 _, pis, _ = self.model(vision, proprioception, done) # Return value and policy dist
                 actions = pis.sample()

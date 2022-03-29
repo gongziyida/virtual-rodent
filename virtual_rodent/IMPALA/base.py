@@ -3,6 +3,7 @@ import copy
 import torch
 from torch.multiprocessing import Queue, Value, Event, Manager, set_start_method
 
+from virtual_rodent.utils import load_checkpoint
 from .Actor import Actor
 from .Simulator import Simulator
 from .Learner import Learner
@@ -70,14 +71,14 @@ class IMPALA:
                 simulator.kill()
             return
 
-
-        actor.join()
+        actor.join(timeout=3)
+        actor.terminate()
 
         for simulator in simulators:
-            simulator.join()
+            simulator.join(timeout=3)
+            simulator.terminate()
 
-        self.model.load_state_dict(state_dict)
-        self.model = self.model.cpu()
+        self.model, _ = load_checkpoint(self.model, os.path.join(self.save_dir, 'model.pt'))
 
 
     def record(self, env_name=None, simulators_params={}, save_full_record={}):

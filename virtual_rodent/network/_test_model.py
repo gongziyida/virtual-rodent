@@ -71,6 +71,10 @@ class TestModel(nn.Module):
 
         self._episode = nn.Parameter(torch.tensor(-1.0), requires_grad=False) # -1: init version
 
+    def reset_rnn(self):
+        self.core_hc = None
+        self.policy_hc = None
+
     def forward(self, visual, propri, done=None):
         """
         Parameters
