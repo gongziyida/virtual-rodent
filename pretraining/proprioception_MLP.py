@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader, random_split
-from torch.utils.tensorboard import SummaryWriter
 
 from dm_control.locomotion.examples import basic_rodent_2020
 
@@ -74,37 +73,34 @@ if __name__ == '__main__':
     model = VAE(enc=MLP(propri_dim, propri_emb_dim), dec=MLPMirror(propri_emb_dim//2, propri_dim))
     model = model.to(_device)
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
-    loss_func = nn.MSELoss()
+    mse = nn.MSELoss(reduction='sum')
 
     path = 'proprioception/'
     if not os.path.exists(path):
         os.makedirs(path)
 
-    # loss_buff = np.zeros((2, epochs))
-    writer = SummaryWriter(path)
+    loss_buff = np.zeros((2, epochs))
 
     for epoch in tqdm(range(epochs)):
         model.train()
         for (data,) in train_loader:
             optimizer.zero_grad()
-            results = model(data)
-            loss = loss_func(data, results)
+            rec, kl = model(data)
+            loss = mse(data, rec) + kl.sum()
             loss.backward()
             optimizer.step()
-            # loss_buff[0, epoch] = loss.item()
-            writer.add_scalars('train/loss', {'loss': loss.item()}, epoch)
+            loss_buff[0, epoch] = loss.item()
 
         model.eval()
         with torch.no_grad():
             for (data,) in train_loader:
-                results = model(data)
-                loss = loss_func(data, results)
-                # loss_buff[1, epoch] = loss.item()
-                writer.add_scalars('test/loss', {'loss': loss.item()}, epoch)
+                rec, kl = model(data)
+                loss = mse(data, rec) + kl.sum()
+                loss_buff[1, epoch] = loss.item()
+        
+        print(loss_buff[:, epoch])
 
         if (epoch+1) % 20 == 0 or epoch+1 == epochs:
             save_checkpoint(model, epoch, os.path.join(path, 'model_%d.pt' % (epoch+1)))
-    # np.save(os.path.join(path, 'loss.npy'), loss_buff)
+    np.save(os.path.join(path, 'loss.npy'), loss_buff)
 
-    writer.flush()
-    writer.close()

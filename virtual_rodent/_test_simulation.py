@@ -2,56 +2,17 @@ import time
 import numpy as np
 import torch
 
-from dm_control import composer
-from dm_control.locomotion.walkers import rodent
-
-_CTRL_DT = .02
-_PHYS_DT = 0.001
+from dm_control import suite
 
 """
-appendages_pos (15): head and 4 paw positions, projected to egocentric frame, and reshaped to 1D
-joints_pos/vel (30): angle and angular velocity of the 1D hinge joints
-tendons_pos/vel (8): extension and extension velocity of the 1D tendons
-sensors_accelerometer/velocimeter/gyro (3): Acceleration/velocity/angular velocity of the body
-world_zaxis (3): the world's z-vector (-gravity) in this Walker's torso frame
-sensors_touch (4): touch sensors (forces) in the 4 paws
 """
-PROPRIOCEPTION_ATTRIBUTES = ['appendages_pos', 'joints_pos', 'joints_vel', 'tendons_pos', 'tendons_vel',
-                             'sensors_accelerometer', 'sensors_velocimeter', 'sensors_gyro',
-                             'sensors_touch', 'world_zaxis']
-
-def make_env(arena, Task, walker=None, time_limit=30, random_state=None, **kwargs):
-    """
-        Parameters
-        ----------
-        arena: dm_control.composer.Arena
-        Task: function
-            constructor that returns dm_control.composer.Task
-
-    """
-    if walker is None: # Build a position-controlled rodent walker
-        walker = rodent.Rat(observable_options={'egocentric_camera': dict(enabled=True)})
-    
-    # Build task
-    task = Task(walker, arena, physics_timestep=_PHYS_DT, control_timestep=_CTRL_DT, **kwargs)
-
-    # Build environment
-    env = composer.Environment(task, time_limit=time_limit, random_state=random_state, 
-                               strip_singleton_obs_buffer_dim=True)
-
-    return env
-
+PROPRIOCEPTION_ATTRIBUTES = ['position', 'velocity', 'touch']
 
 def get_proprioception(time_step):
     ret = []
     for pa in PROPRIOCEPTION_ATTRIBUTES:
-        ret.append(time_step.observation['walker/' + pa])
+        ret.append(time_step.observation[pa])
     return np.concatenate(ret).astype(np.float32)
-
-def get_vision(time_step):
-    vis = np.moveaxis(time_step.observation['walker/egocentric_camera'], -1, 0) # Channel as axis 0
-    vis = vis.astype(np.float32) / 255
-    return vis
 
 
 def simulate(env, model, stop_criteron, device, reset=True, time_step=None,
@@ -73,7 +34,7 @@ def simulate(env, model, stop_criteron, device, reset=True, time_step=None,
     stop = False
     while not stop:
         # Get state, reward and discount
-        vision = torch.from_numpy(get_vision(time_step)).to(device)
+        vision = torch.tensor(0).to(device)
         proprioception = torch.from_numpy(get_proprioception(time_step)).to(device)
         reward = time_step.reward
 
@@ -114,7 +75,7 @@ def simulator(env, model, device,
     step = 0
     while True:
         # Get state, reward and discount
-        vision = torch.from_numpy(get_vision(time_step)).to(device)
+        vision = torch.tensor(0).to(device)
         proprioception = torch.from_numpy(get_proprioception(time_step)).to(device)
         reward = time_step.reward
 

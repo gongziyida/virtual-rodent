@@ -1,15 +1,17 @@
 import os, time
+import copy
 import torch
-from torch.multiprocessing import Queue, Value, set_start_method
+from torch.multiprocessing import Queue, Value, Manager, set_start_method
 
 from .Actor import Actor
 from .Learner import Learner
+from .Recorder import Recorder
 
 set_start_method('spawn', force=True)
 _N_CUDA = torch.cuda.device_count()
 
 class IMPALA:
-    def __init__(self, env_name, model, save_dir, max_step, max_episode):
+    def __init__(self, env_name, model, save_dir):
         """ Multi-actor-single-learner IMPALA in Pytorch
         parameters
         ----------
@@ -20,53 +22,88 @@ class IMPALA:
             model does not need to be on CUDA. It will be handled in the method
         """
         self.env_name = env_name
-        self.model = model.to('cuda:%d' % (_N_CUDA - 1))
+        self.model = model
+
         self.save_dir = save_dir
-        self.max_step = max_step
-        self.max_episode = max_episode
+        if not os.path.exists(self.save_dir):
+            os.makedirs(self.save_dir, exist_ok=True)
 
-        self.model.share_memory()
-        self._training_done = Value('I', 0) # 'I' unsigned int
-        self._sample_queue = Queue()
-        
-        n_cuda_actor = _N_CUDA if _N_CUDA == 1 else _N_CUDA - 1
+    def train(self, max_step, max_episode, repeat=1, gpu_simulation=False):
+        training_done = Value('I', 0) # 'I' unsigned int
+        sample_queue = Queue()
+        state_dict = Manager().dict(copy.deepcopy(self.model.state_dict()))
+
         # Processes
-        self._actors = [Actor(i%n_cuda_actor, self._sample_queue, self._training_done, 
-                              model, env_i, max_step)
-                        for i, env_i in enumerate(env_name)]
+        actors = []
+        for _ in range(repeat):
+            for i, env_i in enumerate(self.env_name):
+                if gpu_simulation:
+                    n_cuda_actor = _N_CUDA if _N_CUDA == 1 else _N_CUDA - 1
+                    actor = Actor(i%n_cuda_actor, sample_queue, training_done,
+                                  copy.deepcopy(self.model), state_dict, 
+                                  env_i, max_step)
 
-        self._learner = Learner(_N_CUDA - 1, self._sample_queue, self._training_done, 
-                                model=self.model, episodes=max_episode, p_hat=2, c_hat=1, 
-                                save_dir=save_dir)
+                else:
+                    actor = Actor('cpu', sample_queue, training_done,
+                                  copy.deepcopy(self.model), state_dict, 
+                                  env_i, max_step)
+                actors.append(actor)
+        
+        if gpu_simulation:
+            learner = Learner(_N_CUDA - 1, sample_queue, training_done, 
+                              self.model, state_dict, max_episode, p_hat=2, c_hat=1,
+                              save_dir=self.save_dir)
+        else: # Occupy all gpus
+            learner = Learner('all', sample_queue, training_done, 
+                              self.model, state_dict, max_episode, p_hat=2, c_hat=1,
+                              save_dir=self.save_dir)
 
-    def __call__(self):
-       # simulate (no grad)
-        for actor in self._actors:
+        for actor in actors:
             actor.start()
-        self._learner.start()
+        learner.start()
 
-        while self._sample_queue.empty():
-            time.sleep(0.1)
+        learner.join()
 
-        self._learner.join()
-
-        if self._training_done.value != 1:
+        if training_done.value != 1:
             print('Learner terminated with error')
-            with self._training_done.get_lock():
-                self._training_done.value = 1
+            with training_done.get_lock():
+                training_done.value = 1
+                while not sample_queue.empty(): # Clear
+                    sample_queue.get(timeout=1)
+                sample_queue.close()
 
-        for actor in self._actors:
+        for actor in actors:
             actor.join()
 
+        self.model.load_state_dict(state_dict)
+        self.model = self.model.cpu()
 
-    def save(self, episode):
-        torch.save(dict(model=self.model.state_dict(), 
-                        parameters=self.parameters,
-                        episode=episode),
-                   os.path.join(self.save_path, '%d.pt' %  episode))
-        
-    def load(self, path):
-        checkpoint = torch.load(path)
-        self.model.load_state_dict(checkpoint['model'])
-        self.parameters = checkpoint['parameters']
-        print('Loaded checkpoint at Episode %d' % checkpoint['episode'])
+
+    def record(self, env_name=None, simulators_params={}, save_full_record={}):
+        """
+        parameters
+        ----------
+        env_name: list or None
+            If None, runs in the environments used for training
+        simulators_params: dict
+            If not empty, the keys must be the name of the enviornments
+            See virtual_rodent/simulation/simulate
+        save_full_record: dict
+            If not empty, the keys must be the name of the enviornments, and items be boolean.
+            If True is given to any environment, the whole return from the simulator will be saved.
+            See virtual_rodent/simulation/simulate
+        """
+        if env_name is None:
+            env_name = self.env_name
+
+        recorders = [Recorder(i%_N_CUDA, copy.deepcopy(self.model), env_i, 
+                              self.save_dir,
+                              simulators_params.get(env_i, {}),
+                              save_full_record.get(env_i, False))
+                     for i, env_i in enumerate(env_name)]
+
+        for recorder in recorders:
+            recorder.start()
+
+        for recorder in recorders:
+            recorder.join()

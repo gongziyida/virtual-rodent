@@ -10,13 +10,16 @@ class VAE(nn.Module):
     def forward(self, x):
         ret = self.enc(x)
         if len(ret) == 2:
-            mu, var = ret
+            mu, logvar = ret
         else:
             mid = ret.shape[-1]//2
-            mu, var = ret[..., :mid], ret[..., mid:]
+            mu, logvar = ret[..., :mid], ret[..., mid:]
+        var = torch.exp(logvar)
         z = mu + var * torch.randn_like(var)
+        
+        kl = -0.5 * (2 * logvar - var - mu**2 + 1)
         x_hat = self.dec(z)
-        return x_hat
+        return x_hat, kl
 
 class MLPMirror(nn.Module):
     def __init__(self, in_dim, out_dim, d=2):

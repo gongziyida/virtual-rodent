@@ -33,7 +33,7 @@ def save_checkpoint(model, epoch, save_path, optimizer=None):
     torch.save(d, save_path)
 
 def load_checkpoint(model, load_path, optimizer=None):
-    checkpoint = torch.load(load_path)
+    checkpoint = torch.load(load_path, map_location='cpu')
     model.load_state_dict(checkpoint['model_state_dict'])
     epoch = checkpoint['epoch']
     if optimizer is not None:
@@ -43,7 +43,7 @@ def load_checkpoint(model, load_path, optimizer=None):
 
 ########## Visualization ##########
 
-def display_video(frames, framerate=30, dpi=70):
+def video(frames, framerate=30, dpi=70):
     """ For IPython do the following on the return `anim`:
         ```
             from IPython.display import HTML

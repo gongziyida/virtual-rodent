@@ -18,6 +18,10 @@ def __builtin_2touch():
     from dm_control.locomotion.examples.basic_rodent_2020 import rodent_two_touch
     return rodent_two_touch()
 
+def __suite_hopper():
+    from dm_control import suite
+    return suite.load('hopper', 'stand')
+
 ######## Customized environment constructors ########
 
 ######## Mapper ########
@@ -26,5 +30,6 @@ MAPPER = {
         'built-in gaps': __builtin_gaps,
         'built-in maze': __builtin_maze,
         'built-in two-touch': __builtin_2touch,
+        '_test_hopper': __suite_hopper,
         }
 
