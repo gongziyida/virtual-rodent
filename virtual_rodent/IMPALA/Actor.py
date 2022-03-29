@@ -1,68 +1,76 @@
 import os, time
 import copy
+import numpy as np
 import torch
 from torch.multiprocessing import Process
 
-from virtual_rodent.environment import MAPPER
-
+QUEUE, ACTION_MADE, INPUT_GIVEN = 0, 1, 2
 
 class Actor(Process):
-    def __init__(self, DEVICE_ID, queue, exit, model, state_dict, env_name, max_step, 
-                 model_update_freq=3):
+    def __init__(self, DEVICE_ID, action_traffic, exit, model, state_dict, model_update_freq=3):
         super().__init__()
         # Constants
         self.DEVICE_ID = DEVICE_ID
-        self.max_step = max_step 
         self.device = torch.device('cpu' if DEVICE_ID == 'cpu' else 'cuda:%d' % DEVICE_ID)
         self.model_update_freq = model_update_freq
+        self.batch_size = len(action_traffic)
 
         # Variables
         self.model = model.to(self.device) # Need disabling CPU binding
         self.state_dict = state_dict
 
         # Shared resources
-        self.queue = queue
+        self.action_traffic = action_traffic
         self.exit = exit
-        # Environment name; instantiate when started
-        self.env_name = env_name
+
+    def fetch_input(self):
+        vision, proprioception, done = [], [], []
+        for i in range(self.batch_size):
+            self.action_traffic[i][INPUT_GIVEN].wait()
+            self.action_traffic[i][INPUT_GIVEN].clear()
+
+            if self.exit.value == 1:
+                return
+
+            inputs = self.action_traffic[i][QUEUE].get()
+            vision.append(inputs[0])
+            proprioception.append(inputs[1])
+            assert len(inputs[2]) == 2 # done should have state -1
+            done.append(inputs[2]) 
+
+        vision = torch.stack(vision, dim=0).unsqueeze(0).to(self.device)
+        proprioception = torch.stack(proprioception, dim=0).unsqueeze(0).to(self.device)
+        assert len(done) == self.batch_size
+        assert vision.shape[0] == 1 and proprioception.shape[0] == 1
+        assert vision.shape[1] == self.batch_size and proprioception.shape[1] == self.batch_size
+        return vision, proprioception, done
+
+    def send_action(self, actions, log_policies):
+        for i in range(self.batch_size): 
+            if self.exit.value == 1:
+                return
+            assert actions.shape[0] == 1 and log_policies.shape[0] == 1
+            self.action_traffic[i][QUEUE].put((actions[0, i], log_policies[0, i]))
+            self.action_traffic[i][ACTION_MADE].set()
 
     def run(self):
-        PID = os.getpid()
-        print('\n[%s] Setting env "%s" on %s' % (PID, self.env_name, self.device))
-        if self.DEVICE_ID == 'cpu':
-            os.environ['MUJOCO_GL'] = 'osmesa'
-        else: # dm_control/mujoco maps onto EGL_DEVICE_ID
-            os.environ['MUJOCO_GL'] = 'egl'
-            os.environ['EGL_DEVICE_ID'] = str(self.DEVICE_ID) 
-        self.env = MAPPER[self.env_name]()
-        print('\n[%s] Simulating on env "%s"' % (PID, self.env_name))
-        if str(os.environ['SIMULATOR_IMPALA']) == 'rodent':
-            from virtual_rodent.simulation import simulator
-        elif str(os.environ['SIMULATOR_IMPALA']) == 'hop_simple':
-            from virtual_rodent._test_simulation import simulator
+        self.PID = os.getpid()
+        print('\n[%s] Setting actor on %s' % (self.PID, self.device))
         
-        batch_count = 0
+        step = 0
         with torch.no_grad():
             while self.exit.value == 0:
-                if batch_count > 0 and batch_count % self.model_update_freq == 0:
+                if step > 0 and step % self.model_update_freq == 0:
                     self.model.load_state_dict(self.state_dict)
                     self.model = self.model.to(self.device)
-                batch_count += 1
+                step += 1
 
-                for i, ret in simulator(self.env, self.model, self.device): # Restart simulation
-                    if self.exit.value == 1:
-                        break
+                vision, proprioception, done = self.fetch_input()
+                if self.exit.value == 1:
+                    return
 
-                    if i == 0: # Init buffer
-                        local_buffer = {k: [] for k in ret.keys()}
+                _, pis, _ = self.model(vision, proprioception, done) # Return value and policy dist
+                actions = pis.sample()
+                log_policies = pis.log_prob(actions)
 
-                    for k in local_buffer.keys(): 
-                        local_buffer[k].append(ret[k])
-
-                    if i == self.max_step: # Share
-                        for k in local_buffer.keys(): # Stack list of tensor
-                            if torch.is_tensor(local_buffer[k][0]):
-                                local_buffer[k] = torch.stack(local_buffer[k], dim=0)
-                        if self.exit.value == 0:
-                            self.queue.put(local_buffer)
-                        break
+                self.send_action(actions, log_policies)

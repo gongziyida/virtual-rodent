@@ -8,6 +8,9 @@ from dm_control import suite
 """
 PROPRIOCEPTION_ATTRIBUTES = ['position', 'velocity', 'touch']
 
+def get_vision(time_step):
+    return np.zeros(1).astype(np.float32)
+
 def get_proprioception(time_step):
     ret = []
     for pa in PROPRIOCEPTION_ATTRIBUTES:

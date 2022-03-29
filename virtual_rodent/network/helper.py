@@ -37,3 +37,45 @@ class MLPMirror(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+    
+
+def fetch_reset_idx(done, T, batch):
+    reset_idx = []
+    assert batch == len(done)
+    for i in range(len(done)):
+        assert T == len(done[i]) - 1 # Including state -1
+        li = []
+        for j in range(len(done[i])): # Here j is actually state j-1
+            if done[i][j]: # Done after action on state j-1
+                li.append(j) # Note that state j should be included
+        if T not in li: # Termination 
+            li.append(T)
+        assert len(li) >= 1
+        reset_idx.append(li)
+    return reset_idx
+
+def iter_over_batch_with_reset(rnn, rnn_input, reset_idx, rnn_hc):
+    out, hc = [], []
+    for i, idx in enumerate(reset_idx):
+        li = []
+        for j in range(len(idx)):
+            # Note: LSTM hidden layers initiated to zero if not provided
+            if j == 0 and idx[j] != 0:  
+                if rnn_hc is None: # First run
+                    rnn_out, rnn_hc = rnn(rnn_input[:idx[j], i:i+1])
+                else: # Continue from last time
+                    rnn_out, rnn_hc = rnn(rnn_input[:idx[j], i:i+1], rnn_hc[i])
+            elif j != len(idx) - 1: # reset
+                rnn_out, rnn_hc = rnn(rnn_input[idx[j]:idx[j+1], i:i+1])
+            else: # The last one is always T, do nothing
+                assert len(idx) > 1 # Otherwise it should proceed to the first cond.
+                break
+
+            li.append(rnn_out)
+        hc.append(rnn_hc) # Only store the last
+        out.append(torch.cat(li, dim=0)) # Cat along temporal dim
+    out = torch.cat(out, dim=1) # Cat along batch dim
+    assert len(out.shape) == 3
+    assert out.shape[0] == rnn_input.shape[0] and out.shape[1] == rnn_input.shape[1]
+    return out, hc
+

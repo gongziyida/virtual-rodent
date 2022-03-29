@@ -1,9 +1,10 @@
 import os, time
 import copy
 import torch
-from torch.multiprocessing import Queue, Value, Manager, set_start_method
+from torch.multiprocessing import Queue, Value, Event, Manager, set_start_method
 
 from .Actor import Actor
+from .Simulator import Simulator
 from .Learner import Learner
 from .Recorder import Recorder
 
@@ -28,52 +29,52 @@ class IMPALA:
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir, exist_ok=True)
 
-    def train(self, max_step, max_episode, repeat=1, gpu_simulation=False):
+    def train(self, max_step, max_episode, repeat=1):
         training_done = Value('I', 0) # 'I' unsigned int
         sample_queue = Queue()
         state_dict = Manager().dict(copy.deepcopy(self.model.state_dict()))
 
         # Processes
-        actors = []
+        simulators = []
+        action_traffic = []
         for _ in range(repeat):
             for i, env_i in enumerate(self.env_name):
-                if gpu_simulation:
-                    n_cuda_actor = _N_CUDA if _N_CUDA == 1 else _N_CUDA - 1
-                    actor = Actor(i%n_cuda_actor, sample_queue, training_done,
-                                  copy.deepcopy(self.model), state_dict, 
-                                  env_i, max_step)
+                action_queue = Queue()
+                action_made = Event()
+                input_given = Event()
+                assert not action_made.is_set()
+                assert not input_given.is_set()
+                action_traffic_i = (action_queue, action_made, input_given)
+                simulator = Simulator('cpu', sample_queue, training_done, 
+                                      action_traffic_i, env_i, max_step)
+                simulator.start()
+                action_traffic.append(action_traffic_i)
+                simulators.append(simulator)
 
-                else:
-                    actor = Actor('cpu', sample_queue, training_done,
-                                  copy.deepcopy(self.model), state_dict, 
-                                  env_i, max_step)
-                actors.append(actor)
-        
-        if gpu_simulation:
-            learner = Learner(_N_CUDA - 1, sample_queue, training_done, 
-                              self.model, state_dict, max_episode, p_hat=2, c_hat=1,
-                              save_dir=self.save_dir)
-        else: # Occupy all gpus
-            learner = Learner('all', sample_queue, training_done, 
-                              self.model, state_dict, max_episode, p_hat=2, c_hat=1,
-                              save_dir=self.save_dir)
+        actor = Actor(0, action_traffic, training_done, 
+                      copy.deepcopy(self.model), state_dict)
+        actor.start()
 
-        for actor in actors:
-            actor.start()
+        learner_devices = (0,) if _N_CUDA == 1 else tuple(range(1, _N_CUDA))
+        learner = Learner(learner_devices, sample_queue, training_done, 
+                          self.model, state_dict, max_episode, p_hat=2, c_hat=1,
+                          save_dir=self.save_dir)
         learner.start()
 
         learner.join()
 
         if training_done.value != 1:
-            print('Learner terminated with error')
-            with training_done.get_lock():
-                training_done.value = 1
-                while not sample_queue.empty(): # Clear
-                    sample_queue.get(timeout=1)
-                sample_queue.close()
+            print('Learner terminated with error. Kill all processes.')
+            actor.kill()
+            for simulator in simulators:
+                simulator.kill()
+            return
 
-        for actor in actors:
-            actor.join()
+
+        actor.join()
+
+        for simulator in simulators:
+            simulator.join()
 
         self.model.load_state_dict(state_dict)
         self.model = self.model.cpu()

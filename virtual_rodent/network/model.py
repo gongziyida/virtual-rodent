@@ -3,39 +3,7 @@ import torch.nn as nn
 
 from virtual_rodent import VISUAL_DIM, PROPRI_DIM, ACTION_DIM
 from .building_blocks import MLP
-
-def fetch_reset_idx(done, T, batch):
-    if done is None:
-        reset_idx = [[0, T] for _ in range(batch)] 
-        return reset_idx 
-
-    reset_idx = []
-    assert batch == len(done)
-    for i in range(len(done)):
-        assert T == len(done[i])
-        li = [0]
-        for j in range(len(done[i])):
-            if done[i][j]: # Done after action on state j
-                li.append(j+1) # Note that state j should be included
-        if len(done[i]) not in li: 
-            li.append(len(done[i]))
-        reset_idx.append(li)
-    return reset_idx
-
-def iter_over_batch_with_reset(rnn, rnn_input, reset_idx):
-    out = []
-    for i, idx in enumerate(reset_idx):
-        li = []
-        for j in range(len(idx) - 1):
-            assert idx[j] != idx[j+1]
-            # Note: LSTM hidden layers initiated to zero if not provided
-            rnn_out, _ = rnn(rnn_input[idx[j]:idx[j+1], i:i+1])
-            li.append(rnn_out)
-        out.append(torch.cat(li, dim=0)) # Cat along temporal dim
-    out = torch.cat(out, dim=1) # Cat along batch dim
-    assert len(out.shape) == 3
-    assert out.shape[0] == rnn_input.shape[0] and out.shape[1] == rnn_input.shape[1]
-    return out
+from .helper import fetch_reset_idx, iter_over_batch_with_reset 
 
 
 class MerelModel(nn.Module):
@@ -54,17 +22,23 @@ class MerelModel(nn.Module):
         self.core_in_dim = visual_emb_dim + propri_emb_dim
         self.core_hidden_dim = core_hidden_dim
         self.core = nn.LSTM(self.core_in_dim, self.core_hidden_dim, batch_first=False)
+        self.core_hc = None
 
         self.value = MLP(in_dim=self.core_hidden_dim, out_dim=1, d=5)
 
         self.policy_in_dim = self.core_in_dim + self.core_hidden_dim + PROPRI_DIM
         self.policy = nn.LSTM(self.policy_in_dim, ACTION_DIM, num_layers=3, batch_first=False)
+        self.policy_hc = None
 
         self.sampling_dist = sampling_dist
 
         self._episode = nn.Parameter(torch.tensor(-1.0), requires_grad=False) # -1: init version
 
-    def forward(self, visual, propri, done=None):
+    def reset_rnn(self):
+        self.core_hc = None
+        self.policy_hc = None
+
+    def forward(self, visual, propri, done):
         """
         Parameters
         ----------
@@ -72,10 +46,9 @@ class MerelModel(nn.Module):
             If the visual/propri are batched sequence, the shape is assumed to be
             (T, batch, channel, length, width,) and (T, batch, keypoints,); or
             (channel, length, width,) and (keypoints,)
-            In the second case ignore done and returns will be squeezed
 
-            done: list or None
-                If not None, assume shape: (batch)(T)
+            done: list
+                Contains boolean. Assume shape: (batch)(T+1), including state -1
         returns
         -------
             value: torch.tensor
@@ -99,17 +72,14 @@ class MerelModel(nn.Module):
         assert len(ft_concat.shape) == 3
 
         # RNNs
-        if T == 1: # Do not need to concern about termination & reset
-            core_out, _ = self.core(ft_concat)
-            policy_input = torch.cat((core_out.detach(), ft_concat, propri), dim=-1)
-            policy_out, _ = self.policy(policy_input)
-            reset_idx = None
+        reset_idx = fetch_reset_idx(done, T, batch)
+        
+        core_out, self.core_hc = iter_over_batch_with_reset(self.core, ft_concat, 
+                                                            reset_idx, self.core_hc)
 
-        else: # Concern about termination & reset
-            reset_idx = fetch_reset_idx(done, T, batch)
-            core_out = iter_over_batch_with_reset(self.core, ft_concat, reset_idx)
-            policy_input = torch.cat((core_out.detach(), ft_concat, propri), dim=-1)
-            policy_out = iter_over_batch_with_reset(self.policy, policy_input, reset_idx)
+        policy_input = torch.cat((core_out.detach(), ft_concat, propri), dim=-1)
+        policy_out, self.policy_hc = iter_over_batch_with_reset(self.policy, policy_input, 
+                                                                reset_idx, self.policy_hc)
 
         value = self.value(core_out)
         if T == 1 and batch == 1:

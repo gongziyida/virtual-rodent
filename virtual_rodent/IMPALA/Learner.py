@@ -98,8 +98,8 @@ class Learner(Process):
 
 # TODO: Parallel learner
     def run(self):
-        PID = os.getpid()
-        print('[%s] Training on %s...' % (PID, self.device))
+        self.PID = os.getpid()
+        print('[%s] Training on %s...' % (self.PID, self.device))
         stats = {'total_loss': [], 'sum_rewards': [], 'sum_vtrace': [],
                 'policy_loss': [], 'policy_weight': self.policy_weight, 
                 'value_loss': [], 'value_weight': self.value_weight, 
@@ -135,7 +135,7 @@ class Learner(Process):
             assert (log_target_policy < 0).all()
             assert (log_behavior_policy < 0).all()
             assert (ratio >= 0).all(), ratio[ratio < 0]
-            assert (p > 0).all()
+            assert (p >= 0).all()
             policy_loss = (-p * log_target_policy * advantage.detach()).sum()
             #assert (policy_loss >= 0).all(), advantage[policy_loss < 0]
 
@@ -162,8 +162,6 @@ class Learner(Process):
             if self.entropy_bonus: # Optional entropy bonus
                 stats['entropy'].append(entropy.item())
             
-            if stats['total_loss'][-1] < 0:
-                print(stats['policy_loss'][-1], stats['value_loss'][-1], stats['entropy'][-1])
             self.save(stats, episode)
 
             # CUDA cannot be shared as `load_state_dict()` will raise error when copying between GPUs
