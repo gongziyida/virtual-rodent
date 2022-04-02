@@ -7,8 +7,7 @@ from .helper import fetch_reset_idx, iter_over_batch_with_reset
 
 
 class MerelModel(nn.Module):
-    def __init__(self, visual_enc, propri_enc, core_hidden_dim,
-                 sampling_dist=torch.distributions.Normal):
+    def __init__(self, visual_enc, propri_enc, core_hidden_dim):
         super().__init__()
 
         self.visual_enc = visual_enc
@@ -30,7 +29,7 @@ class MerelModel(nn.Module):
         self.policy = nn.LSTM(self.policy_in_dim, ACTION_DIM, num_layers=3, batch_first=False)
         self.policy_hc = None
 
-        self.sampling_dist = sampling_dist
+        self.log_std = nn.Parameter(torch.full((ACTION_DIM,), 0.5))
 
         self._episode = nn.Parameter(torch.tensor(-1.0), requires_grad=False) # -1: init version
 
@@ -85,7 +84,11 @@ class MerelModel(nn.Module):
         if T == 1 and batch == 1:
             value = value.squeeze()
             policy_out = policy_out.squeeze()
-        pi = self.sampling_dist(policy_out, torch.tensor(1).to(policy_out.device))
+
+        std = torch.clamp(torch.exp(self.log_std), 1e-3, 10)
+        std = std.view(*([1] * len(policy_out.shape[:-1])), *std.shape)
+        assert len(std.shape) == len(policy_out.shape)
+        pi = torch.distributions.Normal(policy_out, std)
         return value, pi, reset_idx
 
     def _reset_episode(self): # For testing

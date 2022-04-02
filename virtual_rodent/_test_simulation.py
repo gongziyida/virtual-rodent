@@ -2,11 +2,10 @@ import time
 import numpy as np
 import torch
 
-PROPRIOCEPTION_ATTRIBUTES = ['position', 'velocity', 'touch']
 
-def get_proprioception(time_step):
+def get_proprioception(time_step, propri_attr):
     ret = []
-    for pa in PROPRIOCEPTION_ATTRIBUTES:
+    for pa in propri_attr:
         ret.append(time_step.observation[pa])
     return np.concatenate(ret).astype(np.float32)
 
@@ -14,7 +13,7 @@ def get_vision(time_step):
     return np.zeros(1).astype(np.float32)
 
 
-def simulate(env, model, stop_criteron, device, reset=True, time_step=None,
+def simulate(env, model, propri_attr, stop_criteron, device, reset=True, time_step=None,
              ext_cam=False, ext_cam_id=(0,), ext_cam_size=(200, 200)):
     """Simulate until stop criteron is met
     """
@@ -31,18 +30,21 @@ def simulate(env, model, stop_criteron, device, reset=True, time_step=None,
         if time_step is None:
             raise ValueError('`time_step` must be given if not reset.')
 
+    action_spec = env.action_spec()
+
     step = 0
     stop = False
     while not stop:
         # Get state, reward and discount
         vision = torch.tensor(0).to(device)
-        proprioception = torch.from_numpy(get_proprioception(time_step)).to(device)
+        proprioception = torch.from_numpy(get_proprioception(time_step, propri_attr)).to(device)
         reward = time_step.reward
 
         _, pi, _ = model(vision, proprioception, [[step == 0, False]]) 
         action = pi.sample()
         log_policy = pi.log_prob(action)
-        time_step = env.step(np.tanh(action.detach().cpu().numpy()))
+        time_step = env.step(np.clip(action.detach().cpu().numpy(), 
+                                     action_spec.minimum, action_spec.maximum))
 
         # Record state t, action t, reward t and done t+1; reward at start is 0
         returns['vision'].append(vision)
@@ -65,7 +67,7 @@ def simulate(env, model, stop_criteron, device, reset=True, time_step=None,
     return returns
 
 
-def simulator(env, model, device,
+def simulator(env, model, propri_attr, device,
               ext_cam=False, ext_cam_id=(0,), ext_cam_size=(200, 200)):
     """Simulation generator, starts from beginning, and reset upon simulation timeout
     """
@@ -75,18 +77,21 @@ def simulator(env, model, device,
         model.reset_rnn()
     returns = dict()
     
+    action_spec = env.action_spec()
+
     step = 0
     done = True
     while True:
         # Get state, reward and discount
         vision = torch.tensor(0).to(device)
-        proprioception = torch.from_numpy(get_proprioception(time_step)).to(device)
+        proprioception = torch.from_numpy(get_proprioception(time_step, propri_attr)).to(device)
         reward = time_step.reward
 
         _, pi, _ = model(vision, proprioception, [[done, False]]) 
         action = pi.sample()
         log_behavior_policy = pi.log_prob(action)
-        time_step = env.step(np.tanh(action.detach().cpu().numpy()))
+        time_step = env.step(np.clip(action.detach().cpu().numpy(), 
+                                     action_spec.minimum, action_spec.maximum))
         done = time_step.last()
 
         # Record state t, action t, reward t and done t+1; reward at start is 0

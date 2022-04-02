@@ -35,12 +35,12 @@ class Simulator(Process):
 
         print('\n[%s] Setting env "%s" on %s with %s' % \
                 (self.PID, self.env_name, self.device, os.environ['MUJOCO_GL']))
-        self.env = MAPPER[self.env_name]()
+        self.env, self.propri_attr = MAPPER[self.env_name]()
         print('\n[%s] Simulating on env "%s"' % (self.PID, self.env_name))
 
 
     def send_input(self, vision, proprioception, last_done):
-        self.action_traffic[QUEUE].put((vision, proprioception, [last_done, False]))
+        self.action_traffic[QUEUE].put((vision, proprioception, torch.tensor([last_done, False])))
         self.action_traffic[INPUT_GIVEN].set()
 
     def fetch_action(self):
@@ -55,8 +55,11 @@ class Simulator(Process):
         self.set_env()
         if str(os.environ['SIMULATOR_IMPALA']) == 'rodent':
             from virtual_rodent.simulation import get_vision, get_proprioception
-        elif str(os.environ['SIMULATOR_IMPALA']) == 'hop_simple':
+        else:
+            print('testing')
             from virtual_rodent._test_simulation import get_vision, get_proprioception
+
+        action_spec = self.env.action_spec()
         
         while self.exit.value == 0:
             time_step = self.env.reset()
@@ -64,19 +67,22 @@ class Simulator(Process):
 
             # Note that the model requires knowing if state -1 is done and state 0 is restart
             local_buffer = dict(vision=[], proprioception=[], action=[], 
-                                log_policy=[], reward=[], done=[True])
+                                log_policy=[], reward=[], done=[torch.tensor(True)])
             step = 0
             while step <= self.max_step:
                 # Get state, reward and discount
                 vision = torch.from_numpy(get_vision(time_step)).to(self.device)
-                proprioception = torch.from_numpy(get_proprioception(time_step)).to(self.device)
+                proprioception = torch.from_numpy(
+                                        get_proprioception(time_step, self.propri_attr)
+                                    ).to(self.device)
                 reward = time_step.reward
 
                 self.send_input(vision, proprioception, last_done)
                 action, log_policy = self.fetch_action()
 
                 # Proceed
-                time_step = self.env.step(np.tanh(action.numpy()))
+                time_step = self.env.step(np.clip(action.numpy(), 
+                                          action_spec.minimum, action_spec.maximum))
                 step += 1
                 last_done = time_step.last()
 
@@ -86,7 +92,7 @@ class Simulator(Process):
                 local_buffer['action'].append(action)
                 local_buffer['log_policy'].append(log_policy)
                 local_buffer['reward'].append(torch.tensor(0 if reward is None else reward))
-                local_buffer['done'].append(last_done)
+                local_buffer['done'].append(torch.tensor(last_done))
 
                 # Reset
                 if time_step.last(): 
@@ -94,8 +100,7 @@ class Simulator(Process):
                     assert not time_step.last()
 
             for k in local_buffer.keys(): # Stack list of tensor
-                if k != 'done':
-                    local_buffer[k] = torch.stack(local_buffer[k], dim=0)
+                local_buffer[k] = torch.stack(local_buffer[k], dim=0)
 
             self.sample_queue.put(local_buffer)
 

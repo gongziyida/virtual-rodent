@@ -4,7 +4,7 @@ import torch
 from torch.multiprocessing import Process
 
 from virtual_rodent.environment import MAPPER
-from virtual_rodent.utils import video
+from virtual_rodent.visualization import video
 
 class Recorder(Process):
     def __init__(self, DEVICE_ID, model, env_name, save_dir,
@@ -33,7 +33,7 @@ class Recorder(Process):
 
         print('\n[%s] Setting env "%s" on %s with %s' % \
                 (self.PID, self.env_name, self.device, os.environ['MUJOCO_GL']))
-        self.env = MAPPER[self.env_name]()
+        self.env, self.propri_attr = MAPPER[self.env_name]()
         print('\n[%s] Simulating on env "%s" for recording' % (self.PID, self.env_name))
 
 
@@ -41,11 +41,13 @@ class Recorder(Process):
         self.set_env()
         if str(os.environ['SIMULATOR_IMPALA']) == 'rodent':
             from virtual_rodent.simulation import simulate
-        elif str(os.environ['SIMULATOR_IMPALA']) == 'hop_simple':
+        else:
+            print('testing')
             from virtual_rodent._test_simulation import simulate
 
         with torch.no_grad():
-            ret = simulate(self.env, self.model, lambda ts, s: ts.last() or s > 60*60*5, self.device, 
+            ret = simulate(self.env, self.model, self.propri_attr, 
+                           lambda ts, s: ts.last() or s > 60*60*5, self.device, 
                            **self.simulator_params)
 
         if self.simulator_params.get('ext_cam', False):

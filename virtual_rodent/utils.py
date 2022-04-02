@@ -1,11 +1,7 @@
 import time, random
 import numpy as np
+import pandas as pd
 import torch
-
-# Visualization
-import matplotlib
-import matplotlib.animation as animation
-import matplotlib.pyplot as plt
 
 class Cache:
     def __init__(self, max_len):
@@ -41,28 +37,17 @@ def load_checkpoint(model, load_path, optimizer=None):
         return model, epoch, optimizer
     return model, epoch
 
-########## Visualization ##########
+def stats_to_dataframe(stats, exclude=[], key_alias={}):
+    df = dict(episode=[], val=[], name=[])
+    for k in stats.keys():
+        if k in exclude:
+            continue
+        data = list(stats[k][stats[k] < np.inf])
+        df['episode'] += list(range(len(data)))
+        df['val'] += data
+        name = key_alias.get(k, k)
+        df['name'] += [name for _ in range(len(data))]
 
-def video(frames, framerate=30, dpi=70):
-    """ For IPython do the following on the return `anim`:
-        ```
-            from IPython.display import HTML
-            HTML(anim.to_html5_video())
-        ```
-    """
-    height, width, _ = frames[0].shape
-    orig_backend = matplotlib.get_backend()
-    matplotlib.use('Agg')  # Switch to headless 'Agg' to inhibit figure rendering.
-    fig, ax = plt.subplots(1, 1, figsize=(width / dpi, height / dpi), dpi=dpi)
-    matplotlib.use(orig_backend)  # Switch back to the original backend.
-    ax.set_axis_off()
-    ax.set_aspect('equal')
-    ax.set_position([0, 0, 1, 1])
-    im = ax.imshow(frames[0])
-    def update(frame):
-      im.set_data(frame)
-      return [im]
-    interval = 1000/framerate
-    anim = animation.FuncAnimation(fig=fig, func=update, frames=frames,
-                                   interval=interval, blit=True, repeat=False)
-    return anim
+    df = pd.DataFrame(df)
+    return df
+

@@ -4,21 +4,20 @@ import torch.nn as nn
 from .building_blocks import MLP
 from .helper import fetch_reset_idx, iter_over_batch_with_reset 
 
-
 class TestModelLinear(nn.Module):
-    def __init__(self, propri_enc, sampling_dist=torch.distributions.Normal):
+    def __init__(self, propri_enc, propri_dim, action_dim):
         super().__init__()
         self.propri_enc = propri_enc
 
         with torch.no_grad():
-            propri_emb_dim = self.propri_enc(torch.rand(1, 15)).squeeze().data.shape[0]
+            propri_emb_dim = self.propri_enc(torch.rand(1, propri_dim)).squeeze().data.shape[0]
 
-        self.value = nn.Sequential(nn.LeakyReLU(), 
-                                   nn.Linear(propri_emb_dim, 1))
-        self.policy = nn.Sequential(nn.LeakyReLU(), 
-                                    nn.Linear(propri_emb_dim, 4))
+        self.value = nn.Linear(propri_emb_dim, 1)
+        self.policy = nn.Sequential(nn.Linear(propri_emb_dim, int(propri_emb_dim//2)),
+                                    nn.LeakyReLU(),
+                                    nn.Linear(int(propri_emb_dim//2), action_dim))
 
-        self.sampling_dist = sampling_dist
+        self.log_std = nn.Parameter(torch.full((action_dim,), 0.5))
 
         self._episode = nn.Parameter(torch.tensor(-1.0), requires_grad=False) # -1: init version
 
@@ -40,7 +39,9 @@ class TestModelLinear(nn.Module):
         if T == 1 and batch == 1:
             value = value.squeeze()
             policy_out = policy_out.squeeze()
-        pi = self.sampling_dist(policy_out, torch.tensor(1).to(policy_out.device))
+        std = torch.clamp(torch.exp(self.log_std), 1e-3, 10)
+        std = std.view(*([1] * len(policy_out.shape[:-1])), *std.shape)
+        pi = torch.distributions.Normal(policy_out, std)
         return value, pi, reset_idx
 
     def _reset_episode(self): # For testing
@@ -51,23 +52,23 @@ class TestModelLinear(nn.Module):
 
 
 class TestModel(nn.Module):
-    def __init__(self, propri_enc, sampling_dist=torch.distributions.Normal):
+    def __init__(self, propri_enc, propri_dim, action_dim):
         super().__init__()
         self.propri_enc = propri_enc
 
         with torch.no_grad():
-            propri_emb_dim = self.propri_enc(torch.rand(1, 15)).squeeze().data.shape[0]
+            propri_emb_dim = self.propri_enc(torch.rand(1, propri_dim)).squeeze().data.shape[0]
 
         self.core = nn.LSTM(propri_emb_dim, propri_emb_dim, batch_first=False)
         self.core_hc = None
 
-        self.value = MLP(propri_emb_dim, out_dim=1, d=5)
+        self.value = nn.Linear(propri_emb_dim, 1)
 
-        self.policy_in_dim = 4 + 4 + 15
-        self.policy = nn.LSTM(self.policy_in_dim, 4, batch_first=False)
+        self.policy_in_dim = propri_emb_dim + propri_emb_dim + propri_dim
+        self.policy = nn.LSTM(self.policy_in_dim, action_dim, batch_first=False)
         self.policy_hc = None
 
-        self.sampling_dist = sampling_dist
+        self.log_std = nn.Parameter(torch.full((action_dim,), 0.5))
 
         self._episode = nn.Parameter(torch.tensor(-1.0), requires_grad=False) # -1: init version
 
@@ -116,7 +117,10 @@ class TestModel(nn.Module):
         if T == 1 and batch == 1:
             value = value.squeeze()
             policy_out = policy_out.squeeze()
-        pi = self.sampling_dist(policy_out, torch.tensor(1).to(policy_out.device))
+        std = torch.clamp(torch.exp(self.log_std), 1e-3, 10)
+        std = std.view(*([1] * len(policy_out.shape[:-1])), *std.shape)
+        assert len(std.shape) == len(policy_out.shape)
+        pi = torch.distributions.Normal(policy_out, std)
         return value, pi, reset_idx
 
     def _reset_episode(self): # For testing

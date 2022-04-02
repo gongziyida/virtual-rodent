@@ -37,7 +37,8 @@ class Actor(Process):
 
         vision = torch.stack(vision, dim=0).unsqueeze(0).to(self.device)
         proprioception = torch.stack(proprioception, dim=0).unsqueeze(0).to(self.device)
-        assert len(done) == self.batch_size
+        done = torch.stack(done, dim=1).to(self.device)
+        assert done.shape[1] == self.batch_size
         assert vision.shape[0] == 1 and proprioception.shape[0] == 1
         assert vision.shape[1] == self.batch_size and proprioception.shape[1] == self.batch_size
         return vision, proprioception, done

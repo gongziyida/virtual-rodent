@@ -41,13 +41,13 @@ class MLPMirror(nn.Module):
 
 def fetch_reset_idx(done, T, batch):
     reset_idx = []
-    assert batch == len(done)
-    for i in range(len(done)):
-        assert T == len(done[i]) - 1 # Including state -1
+    assert batch == done.shape[1], '%d, %d' % (batch, done.shape[1])
+    for i in range(done.shape[1]):
+        assert T == done.shape[0] - 1, '%d, %d' % (T, done.shape[0])  # Including state -1
         li = []
-        for j in range(len(done[i])): # Here j is actually state j-1
-            if done[i][j]: # Done after action on state j-1
-                li.append(j) # Note that state j should be included
+        for t in range(done.shape[0]): # Here t is actually state t-1
+            if done[t, i]: # Done after action on state t-1
+                li.append(t) # Note that state t should be included
         if T not in li: # Termination 
             li.append(T)
         assert len(li) >= 1

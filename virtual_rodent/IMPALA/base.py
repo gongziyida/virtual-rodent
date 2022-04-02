@@ -30,7 +30,7 @@ class IMPALA:
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir, exist_ok=True)
 
-    def train(self, max_step, max_episode, repeat=1):
+    def train(self, max_step, max_episode, batch_size=10, repeat=1):
         training_done = Value('I', 0) # 'I' unsigned int
         sample_queue = Queue()
         state_dict = Manager().dict(copy.deepcopy(self.model.state_dict()))
@@ -57,9 +57,11 @@ class IMPALA:
         actor.start()
 
         learner_devices = (0,) if _N_CUDA == 1 else tuple(range(1, _N_CUDA))
-        learner = Learner(learner_devices, sample_queue, training_done, 
-                          self.model, state_dict, max_episode, p_hat=2, c_hat=1,
-                          save_dir=self.save_dir)
+        learner = Learner(learner_devices, sample_queue, training_done, self.model, 
+                          state_dict, p_hat=2, c_hat=1,
+                          save_dir=self.save_dir, 
+                          n_batches=max_episode//batch_size, 
+                          batch_size=batch_size)
         learner.start()
 
         learner.join()

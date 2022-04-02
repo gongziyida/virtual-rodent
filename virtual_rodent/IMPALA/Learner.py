@@ -1,7 +1,8 @@
-import os, time
+import os, time, pickle
 import copy
 from tqdm import tqdm
 from queue import Empty # Exception
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.multiprocessing import Process
@@ -10,34 +11,30 @@ from virtual_rodent.utils import save_checkpoint, Cache
 
 _ATTRIBUTES = ('vision', 'proprioception', 'action', 'log_policy', 'reward', 'done')
 
+
 class Learner(Process):
     def __init__(self, DEVICE_ID, queue, training_done, model, state_dict, 
-                 episodes, p_hat, c_hat, save_dir,
-                 discount=0.99, entropy_bonus=True, clip_gradient=40, batch_size=5, lr=5e-4,
-                 policy_weight=1, value_weight=1, entropy_weight=1e-2, save_window=None):
+                 n_batches, p_hat, c_hat, save_dir,
+                 discount=0.99, entropy_bonus=True, clip_gradient=10, batch_size=5, lr=5e-4,
+                 policy_weight=1, value_weight=0.5, entropy_weight=1e-2, reduction='mean', 
+                 save_window=None):
         super().__init__()
         # Constants
         self.DEVICE_ID = DEVICE_ID
-        self.episodes = episodes
         self.discount, self.p_hat, self.c_hat = discount, p_hat, c_hat
         self.entropy_bonus = entropy_bonus
         self.clip_gradient = clip_gradient
         self.policy_weight = policy_weight
         self.value_weight = value_weight
         self.entropy_weight = entropy_weight
-        self.save_window = max(episodes//50, 2) if save_window is None else save_window
         self.save_dir = save_dir
-        self.batch_cache = Cache(max_len=batch_size*2)
+        self.reduction = reduction
+        self.batch_size = batch_size
+        self.batch_cache = Cache(max_len=int(batch_size*1.5))
+        self.episodes = int(n_batches * batch_size)
+        self.save_window = max(self.episodes//50, 2) if save_window is None else save_window
 
-        # Variables
-        if DEVICE_ID == 'all':
-            self.device = torch.device('cuda')
-            self.model = nn.DataParallel(model).to(self.device)
-            self.batch_size = batch_size * torch.cuda.device_count()
-        else:
-            self.device = torch.device('cuda:%d' % DEVICE_ID)
-            self.model = model.to(self.device)
-            self.batch_size = batch_size
+        self.model = model
 
         self.last_saved = time.time()
 
@@ -46,12 +43,34 @@ class Learner(Process):
         self.training_done = training_done
         self.state_dict = state_dict
 
-        self.optimizer = torch.optim.RMSprop(model.parameters(), lr=lr)
+        self.optimizer = torch.optim.RMSprop(model.parameters(), lr=lr, 
+                                             weight_decay=1e-3, eps=1e-4)
+
+    def setup(self):
+        if len(self.DEVICE_ID) > 1:
+            os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(i) for i in self.DEVICE_ID])
+            self.device = torch.device('cuda')
+            self.model = nn.DataParallel(self.model, dim=1).to(self.device) # Batch second
+        else:
+            self.device = torch.device('cuda:%d' % self.DEVICE_ID[0])
+            self.model = self.model.to(self.device)
+
+        self.PID = os.getpid()
+        print('[%s] Training on cuda %s' % (self.PID, self.DEVICE_ID))
+
+        keys = ('total_loss', 'sum_rewards', 'sum_vtrace', 'policy_loss', 'policy_weight', 
+                'value_loss', 'value_weight', 'entropy', 'entropy_weight')
+        stats = {k: np.ones(self.episodes) * np.inf for k in keys}
+        stats['policy_weight'][:] = self.policy_weight
+        stats['value_weight'][:]= self.value_weight
+        stats['entropy_weight'][:] = self.entropy_weight
+
+        return stats
 
     
     def fetch_new_sample(self):
         try:
-            x = self.queue.get(timeout=0.1)
+            x = self.queue.get(timeout=0.01)
             sample = dict()
             for k in x.keys():
             # Map to current device
@@ -95,27 +114,20 @@ class Learner(Process):
                             self.discount * c[j] * (vtrace[j+1] - values[j+1])
         return vtrace.detach(), p.detach()
 
-# TODO: Parallel learner
     def run(self):
-        self.PID = os.getpid()
-        print('[%s] Training on %s...' % (self.PID, self.device))
-        stats = {'total_loss': [], 'sum_rewards': [], 'sum_vtrace': [],
-                'policy_loss': [], 'policy_weight': self.policy_weight, 
-                'value_loss': [], 'value_weight': self.value_weight, 
-                'entropy': [], 'entropy_weight': self.entropy_weight
-                }
+        stats = self.setup()
 
         # (T+1 or T, batch, ...) for tensors, (batch)(T+1 or T)(...) for lists
         # First batch takes longer to wait. 
         # Do it here for tqdm to estimate the runtime correctly
         batch = self.fetch_batch()
 
-        for episode in tqdm(range(self.episodes), disable=False):
+        for episode in tqdm(range(0, self.episodes, self.batch_size), disable=False):
             self.optimizer.zero_grad()
 
             vision, propri = batch['vision'], batch['proprioception']
             # Output (T+1, batch, ...). Done state included; pi is torch.Distribution
-            values, pis, reset_idx = self.model(vision, propri, batch['done'])
+            values, pis, _ = self.model(vision, propri, batch['done'])
             
             rewards = batch['reward'][:-1].unsqueeze(-1) # (T, batch, 1)
 
@@ -127,39 +139,37 @@ class Learner(Process):
             
             vtrace, p = self.V_trace(values, rewards, ratio)
 
-            # Gradient descent for value function (L2)
-            value_loss = (vtrace - values).pow(2).sum() / 2
+            # Gradient descent for value function (L2). The last is 0 anyway
+            # (T+1, batch, 1) -> (batch,)
+            value_loss = ((vtrace - values).pow(2) / 2).sum((0, 2))
             # Gradient ascent for policy only
             advantage = rewards + self.discount * vtrace[1:] - values[:-1]
-            assert (log_target_policy < 0).all()
-            assert (log_behavior_policy < 0).all()
-            assert (ratio >= 0).all(), ratio[ratio < 0]
-            assert (p >= 0).all()
-            policy_loss = (-p * log_target_policy * advantage.detach()).sum()
-            #assert (policy_loss >= 0).all(), advantage[policy_loss < 0]
+            # (T, batch, 1) -> (batch,)
+            policy_loss = -(p * log_target_policy * advantage.detach()).sum((0, 2)) 
 
             total_loss = value_loss * self.value_weight + policy_loss * self.policy_weight
 
             if self.entropy_bonus: # Optional entropy bonus
-                entropy = -(log_target_policy * torch.exp(log_target_policy)).sum()
+                entropy = pis.entropy()[:-1].sum((0, 2)) # (T, batch, action dim) -> (batch,)
                 total_loss -= entropy * self.entropy_weight
 
+                stats['entropy'][episode:episode+self.batch_size] = entropy.detach().cpu().numpy()
+
+            stats['sum_rewards'][episode:episode+self.batch_size] = \
+                    rewards.detach().cpu().numpy().sum((0, 2))
+            stats['sum_vtrace'][episode:episode+self.batch_size] = \
+                    vtrace.detach().cpu().numpy().sum((0, 2))
+            stats['total_loss'][episode:episode+self.batch_size] = total_loss.detach().cpu().numpy()
+            stats['policy_loss'][episode:episode+self.batch_size] = policy_loss.detach().cpu().numpy()
+            stats['value_loss'][episode:episode+self.batch_size] = value_loss.detach().cpu().numpy()
+
+            total_loss = total_loss.mean() if self.reduction == 'mean' else total_loss.sum()
             total_loss.backward()
 
             if self.clip_gradient is not None:
                 nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_gradient)
 
             self.optimizer.step()
-            self.model._update_episode()
-            # print('learner', self.model._episode.data)
-           
-            stats['sum_rewards'].append(rewards.sum().item())
-            stats['sum_vtrace'].append(vtrace.sum().item())
-            stats['total_loss'].append(total_loss.item())
-            stats['policy_loss'].append(policy_loss.item())
-            stats['value_loss'].append(value_loss.item())
-            if self.entropy_bonus: # Optional entropy bonus
-                stats['entropy'].append(entropy.item())
             
             self.save(stats, episode)
 
@@ -173,11 +183,13 @@ class Learner(Process):
             self.training_done.value = 1
         del self.batch_cache # Free the storage of variables from the producers
 
+
     def save(self, stats, episode):
         t = time.time() - self.last_saved
         if (t > 1200) or (episode % (self.episodes//10) == 0) or (episode == self.episodes - 1):
             save_checkpoint(self.model, episode, os.path.join(self.save_dir, 'model.pt'))
 
-        if (episode + 1) % (self.episodes//10) == 0 or episode == self.episodes - 1:
+        if episode % (self.episodes//10) == 0 or episode == self.episodes - self.batch_size:
             # Update the stats periodically
-            torch.save(stats, os.path.join(self.save_dir, 'training_stats.pt'))
+            with open(os.path.join(self.save_dir, 'training_stats.pkl'), 'wb') as f:
+                pickle.dump(stats, f, protocol=pickle.HIGHEST_PROTOCOL)
