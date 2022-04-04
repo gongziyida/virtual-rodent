@@ -6,7 +6,7 @@ from torch.multiprocessing import Process
 
 QUEUE, ACTION_MADE, INPUT_GIVEN = 0, 1, 2
 
-class Actor(Process):
+class Agent(Process):
     def __init__(self, DEVICE_ID, action_traffic, exit, model, state_dict, model_update_freq):
         super().__init__()
         # Constants

@@ -5,7 +5,7 @@ import torch
 from torch.multiprocessing import Queue, Value, Event, Manager, set_start_method
 
 from virtual_rodent.utils import load_checkpoint
-from .Actor import Actor
+from .Agent import Agent
 from .Simulator import Simulator
 from .Learner import Learner
 from .Recorder import Recorder
@@ -57,7 +57,7 @@ class IMPALA:
             model_update_freq = max_step * 3
             print(model_update_freq)
     
-        actor = Actor(0, action_traffic, training_done, copy.deepcopy(self.model), 
+        actor = Agent(0, action_traffic, training_done, copy.deepcopy(self.model), 
                       state_dict, model_update_freq)
         actor.start()
 
