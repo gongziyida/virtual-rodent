@@ -106,14 +106,20 @@ class Learner(Process):
             p = torch.clamp(target_behavior_ratio, max=self.p_hat)
             c = torch.clamp(target_behavior_ratio, max=self.c_hat)
             dV = (rewards + self.discount * values[1:] - values[:-1]) * p
-
+            
             vtrace = torch.zeros(*values.shape).to(self.device) # (T+1, batch, 1)
             vtrace[-1] = values[-1]
             for i in range(1, len(vtrace)): 
                 j = len(vtrace) - 1 - i # Backward
                 vtrace[j] = values[j] + dV[j] + \
                             self.discount * c[j] * (vtrace[j+1] - values[j+1])
-        return vtrace.detach(), p.detach()
+
+                for b in range(self.batch_size): # This is a really rare event
+                    if j + 1 in reset_idx[b]: # Reset
+                        print(j, reset_idx[b])
+                        vtrace[j, b] = values[j]
+            return vtrace.detach(), p.detach()
+
 
     def run(self):
         stats = self.setup()
