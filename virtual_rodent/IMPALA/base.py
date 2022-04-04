@@ -1,5 +1,6 @@
 import os, time
 import copy
+import numpy as np
 import torch
 from torch.multiprocessing import Queue, Value, Event, Manager, set_start_method
 
@@ -30,7 +31,8 @@ class IMPALA:
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir, exist_ok=True)
 
-    def train(self, max_step, max_episode, batch_size=10, repeat=1):
+    def train(self, max_step, max_episode, model_update_freq=None, batch_size=10, repeat=1,
+              simulator_params={}, learner_params={}):
         training_done = Value('I', 0) # 'I' unsigned int
         sample_queue = Queue()
         state_dict = Manager().dict(copy.deepcopy(self.model.state_dict()))
@@ -43,25 +45,29 @@ class IMPALA:
                 action_queue = Queue()
                 action_made = Event()
                 input_given = Event()
-                assert not action_made.is_set()
-                assert not input_given.is_set()
                 action_traffic_i = (action_queue, action_made, input_given)
                 simulator = Simulator('cpu', sample_queue, training_done, 
-                                      action_traffic_i, env_i, max_step)
+                                      action_traffic_i, env_i, max_step,
+                                      **simulator_params)
                 simulator.start()
                 action_traffic.append(action_traffic_i)
                 simulators.append(simulator)
 
-        actor = Actor(0, action_traffic, training_done, 
-                      copy.deepcopy(self.model), state_dict)
+        if model_update_freq is None:
+            model_update_freq = max_step * 3
+            print(model_update_freq)
+    
+        actor = Actor(0, action_traffic, training_done, copy.deepcopy(self.model), 
+                      state_dict, model_update_freq)
         actor.start()
 
         learner_devices = (0,) if _N_CUDA == 1 else tuple(range(1, _N_CUDA))
         learner = Learner(learner_devices, sample_queue, training_done, self.model, 
-                          state_dict, p_hat=2, c_hat=1,
+                          state_dict, p_hat=1, c_hat=1,
                           save_dir=self.save_dir, 
                           n_batches=max_episode//batch_size, 
-                          batch_size=batch_size)
+                          batch_size=batch_size, 
+                          **learner_params)
         learner.start()
 
         learner.join()
@@ -97,10 +103,12 @@ class IMPALA:
             If True is given to any environment, the whole return from the simulator will be saved.
             See virtual_rodent/simulation/simulate
         """
+        self.model, _ = load_checkpoint(self.model, os.path.join(self.save_dir, 'model.pt'))
+
         if env_name is None:
             env_name = self.env_name
 
-        recorders = [Recorder(i%_N_CUDA, copy.deepcopy(self.model), env_i, 
+        recorders = [Recorder(i%_N_CUDA, copy.deepcopy(self.model), env_i,
                               self.save_dir,
                               simulators_params.get(env_i, {}),
                               save_full_record.get(env_i, False))

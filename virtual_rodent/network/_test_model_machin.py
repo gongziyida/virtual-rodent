@@ -23,7 +23,9 @@ class TestModelLinear(nn.Module):
 
         self._episode = nn.Parameter(torch.tensor(-1.0), requires_grad=False) # -1: init version
 
-    def forward(self, visual, propri, done=None):
+    def forward(self, state, done=None):
+        visual, propri = state
+        del state
         if len(propri.shape) == 1:
             propri = propri.view(1, 1, *propri.shape)
             T, batch = 1, 1
@@ -80,7 +82,7 @@ class TestModel(nn.Module):
         self.core_hc = None
         self.policy_hc = None
 
-    def forward(self, visual, propri, done):
+    def forward(self, state):
         """
         Parameters
         ----------
@@ -98,6 +100,8 @@ class TestModel(nn.Module):
             pi: torch.Distribution
             reset_idx: nested list or None
         """
+        visual, propri, done = state
+        del state
         if len(propri.shape) == 1:
             propri = propri.view(1, 1, *propri.shape)
             T, batch = 1, 1

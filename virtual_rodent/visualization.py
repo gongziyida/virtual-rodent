@@ -52,8 +52,7 @@ def plot_smooth_training_curve(t, val, n_subsamples=100, **kwargs):
     t, val = t.to_numpy(), val.to_numpy()
     plt.plot(val, alpha=0.5)
     window = int(len(val)//n_subsamples) if len(val) > n_subsamples * 5 else 10
-    m = int(len(val)//window)
-    smoothed = [val[i*window:(i+1)*window].mean() for i in range(m)]
+    smoothed = [val[i:i+window].mean() for i in range(0, len(val), window)]
     plt.plot(list(range(0, len(val), window)), smoothed)
     plt.ylim([min(smoothed) - abs(min(smoothed)) * 0.2, 
               max(smoothed) + abs(max(smoothed)) * 0.2])

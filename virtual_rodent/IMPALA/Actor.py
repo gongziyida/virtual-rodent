@@ -7,7 +7,7 @@ from torch.multiprocessing import Process
 QUEUE, ACTION_MADE, INPUT_GIVEN = 0, 1, 2
 
 class Actor(Process):
-    def __init__(self, DEVICE_ID, action_traffic, exit, model, state_dict, model_update_freq=3):
+    def __init__(self, DEVICE_ID, action_traffic, exit, model, state_dict, model_update_freq):
         super().__init__()
         # Constants
         self.DEVICE_ID = DEVICE_ID
@@ -44,8 +44,11 @@ class Actor(Process):
         return vision, proprioception, done
 
     def send_action(self, actions, log_policies):
+        if len(actions.shape) == 1 and self.batch_size == 1:
+            assert len(log_policies.shape) == 1, '%s' % log_policies.shape
+            actions, log_policies = actions.unsqueeze(0), log_policies.unsqueeze(0)
         for i in range(self.batch_size): 
-            assert actions.shape[0] == 1 and log_policies.shape[0] == 1
+            assert actions.shape[0] == 1 and log_policies.shape[0] == 1, '%s, %s' % (actions.shape, log_policies.shape)
             self.action_traffic[i][QUEUE].put((actions[0, i], log_policies[0, i]))
             self.action_traffic[i][ACTION_MADE].set()
 

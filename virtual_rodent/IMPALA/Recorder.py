@@ -46,14 +46,13 @@ class Recorder(Process):
             from virtual_rodent._test_simulation import simulate
 
         with torch.no_grad():
-            ret = simulate(self.env, self.model, self.propri_attr, 
-                           lambda ts, s: ts.last() or s > 60*60*5, self.device, 
+            ret = simulate(self.env, self.model, self.propri_attr, max_step=5000, device=self.device, 
                            **self.simulator_params)
 
-        if self.simulator_params.get('ext_cam', False):
-            ext_cam_id = self.simulator_params.get('ext_cam_id', (0,))
+        if self.simulator_params.get('ext_cam', True):
+            ext_cam = self.simulator_params.get('ext_cam', (0,))
             ext_cam_size = self.simulator_params.get('ext_cam_size', (200, 200))
-            for i in ext_cam_id:
+            for i in ext_cam:
                 anim = video(ret['cam%d'%i])
                 fname = '%s_%s_cam%d.mp4' % (self.env_name, self.PID, i)
                 anim.save(os.path.join(self.save_dir, fname))

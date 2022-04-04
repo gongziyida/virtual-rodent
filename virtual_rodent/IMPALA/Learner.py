@@ -15,7 +15,7 @@ _ATTRIBUTES = ('vision', 'proprioception', 'action', 'log_policy', 'reward', 'do
 class Learner(Process):
     def __init__(self, DEVICE_ID, queue, training_done, model, state_dict, 
                  n_batches, p_hat, c_hat, save_dir,
-                 discount=0.99, entropy_bonus=True, clip_gradient=10, batch_size=5, lr=5e-4,
+                 discount=0.99, entropy_bonus=True, clip_gradient=40, batch_size=5, lr=5e-4,
                  policy_weight=1, value_weight=0.5, entropy_weight=1e-2, reduction='mean', 
                  save_window=None):
         super().__init__()
@@ -44,7 +44,7 @@ class Learner(Process):
         self.state_dict = state_dict
 
         self.optimizer = torch.optim.RMSprop(model.parameters(), lr=lr, 
-                                             weight_decay=1e-3, eps=1e-4)
+                                             weight_decay=0, eps=1e-4)
 
     def setup(self):
         if len(self.DEVICE_ID) > 1:

@@ -13,13 +13,13 @@ def get_vision(time_step):
     return np.zeros(1).astype(np.float32)
 
 
-def simulate(env, model, propri_attr, stop_criteron, device, reset=True, time_step=None,
-             ext_cam=False, ext_cam_id=(0,), ext_cam_size=(200, 200)):
+def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=None,
+             ext_cam=(0,), ext_cam_size=(200, 200)):
     """Simulate until stop criteron is met
     """
     start_time = time.time()
 
-    returns = dict([('cam%d'%i, []) for i in ext_cam_id])
+    returns = dict({'cam%d'%i: [] for i in ext_cam})
     returns.update(dict(vision=[], proprioception=[], action=[], reward=[], log_policy=[]))
     
     if reset:
@@ -32,15 +32,18 @@ def simulate(env, model, propri_attr, stop_criteron, device, reset=True, time_st
 
     action_spec = env.action_spec()
 
-    step = 0
-    stop = False
-    while not stop:
+    done = torch.zeros(2, 1, dtype=torch.bool) # (T, batch)
+    done[1] = False
+    for step in range(max_step):
+        done[0] = step == 0
+        if time_step.last():
+            break
         # Get state, reward and discount
         vision = torch.tensor(0).to(device)
         proprioception = torch.from_numpy(get_proprioception(time_step, propri_attr)).to(device)
         reward = time_step.reward
 
-        _, pi, _ = model(vision, proprioception, [[step == 0, False]]) 
+        _, pi, _ = model(vision, proprioception, done) 
         action = pi.sample()
         log_policy = pi.log_prob(action)
         time_step = env.step(np.clip(action.detach().cpu().numpy(), 
@@ -52,47 +55,42 @@ def simulate(env, model, propri_attr, stop_criteron, device, reset=True, time_st
         returns['action'].append(action)
         returns['reward'].append(torch.tensor(0 if reward is None else reward))
         returns['log_policy'].append(log_policy)
-        if ext_cam: # Record external camera
-            for i in range(len(ext_cam_id)):
-                cam = env.physics.render(camera_id=ext_cam_id[i], 
-                        height=ext_cam_size[0], width=ext_cam_size[1])
-                returns['cam%d'%ext_cam_id[i]].append(cam)
-
-        step += 1
-        stop = stop_criteron(time_step, step)
+        for i in ext_cam:
+            cam = env.physics.render(camera_id=i, 
+                    height=ext_cam_size[0], width=ext_cam_size[1])
+            returns['cam%d'%i].append(cam)
 
     end_time = time.time()
     returns['time'] = end_time - start_time
     returns['T'] = step 
     return returns
 
-
 def simulator(env, model, propri_attr, device,
-              ext_cam=False, ext_cam_id=(0,), ext_cam_size=(200, 200)):
+              ext_cam=(), ext_cam_size=(200, 200)):
     """Simulation generator, starts from beginning, and reset upon simulation timeout
     """
+    action_spec = env.action_spec()
     time_step = env.reset()
     assert not time_step.last()
     if hasattr(model, 'reset_rnn'):
         model.reset_rnn()
     returns = dict()
-    
-    action_spec = env.action_spec()
-
     step = 0
-    done = True
+    done = torch.zeros(2, 1, dtype=torch.bool) # (T, batch)
+    done[0] = True
+    done[1] = False
     while True:
         # Get state, reward and discount
         vision = torch.tensor(0).to(device)
         proprioception = torch.from_numpy(get_proprioception(time_step, propri_attr)).to(device)
         reward = time_step.reward
 
-        _, pi, _ = model(vision, proprioception, [[done, False]]) 
+        _, pi, _ = model(vision, proprioception, done)
         action = pi.sample()
         log_behavior_policy = pi.log_prob(action)
         time_step = env.step(np.clip(action.detach().cpu().numpy(), 
                                      action_spec.minimum, action_spec.maximum))
-        done = time_step.last()
+        done[0] = time_step.last()
 
         # Record state t, action t, reward t and done t+1; reward at start is 0
         returns['vision'] = vision
@@ -100,17 +98,16 @@ def simulator(env, model, propri_attr, device,
         returns['action'] = action
         returns['log_policy'] = log_behavior_policy 
         returns['reward'] = torch.tensor(0 if reward is None else reward)
-        returns['done'] = done
-        if ext_cam: # Record external camera
-            for i in range(len(ext_cam_id)):
-                cam = env.physics.render(camera_id=ext_cam_id[i], 
-                        height=ext_cam_size[0], width=ext_cam_size[1])
-                returns['cam%d'%ext_cam_id[i]] = cam
+        returns['done'] = time_step.last()
+        for i in ext_cam:
+            cam = env.physics.render(camera_id=i,
+                    height=ext_cam_size[0], width=ext_cam_size[1])
+            returns['cam%d'%i] = cam
 
         yield step, returns
         step += 1
 
-        if done: 
+        if time_step.last(): 
             time_step = env.reset()
             assert not time_step.last()
 

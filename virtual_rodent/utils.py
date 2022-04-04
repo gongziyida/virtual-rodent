@@ -39,10 +39,10 @@ def load_checkpoint(model, load_path, optimizer=None):
 
 def stats_to_dataframe(stats, exclude=[], key_alias={}):
     df = dict(episode=[], val=[], name=[])
-    for k in stats.keys():
+    for k, v in stats.items():
         if k in exclude:
             continue
-        data = list(stats[k][stats[k] < np.inf])
+        data = list(v[v < np.inf])
         df['episode'] += list(range(len(data)))
         df['val'] += data
         name = key_alias.get(k, k)
