@@ -54,8 +54,7 @@ class IMPALA:
                 simulators.append(simulator)
 
         if model_update_freq is None:
-            model_update_freq = max_step * 3
-            print(model_update_freq)
+            model_update_freq = max_step * 5
     
         actor = Agent(0, action_traffic, training_done, copy.deepcopy(self.model), 
                       state_dict, model_update_freq)

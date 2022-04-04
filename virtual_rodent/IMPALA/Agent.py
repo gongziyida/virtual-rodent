@@ -4,6 +4,8 @@ import numpy as np
 import torch
 from torch.multiprocessing import Process
 
+from virtual_rodent.network.helper import fetch_reset_idx
+
 QUEUE, ACTION_MADE, INPUT_GIVEN = 0, 1, 2
 
 class Agent(Process):
@@ -66,8 +68,7 @@ class Agent(Process):
 
                 vision, proprioception, done = self.fetch_input()
 
-                _, pis, _ = self.model(vision, proprioception, done) # Return value and policy dist
-                actions = pis.sample()
-                log_policies = pis.log_prob(actions)
+                reset_idx = fetch_reset_idx(done, 1, self.batch_size)
+                _, actions, log_policies, _ = self.model((vision, proprioception, reset_idx))
 
                 self.send_action(actions, log_policies)

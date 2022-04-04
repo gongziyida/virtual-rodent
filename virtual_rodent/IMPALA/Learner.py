@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 from torch.multiprocessing import Process
 
+from virtual_rodent.network.helper import fetch_reset_idx
 from virtual_rodent.utils import save_checkpoint, Cache
 
 _ATTRIBUTES = ('vision', 'proprioception', 'action', 'log_policy', 'reward', 'done')
@@ -100,7 +101,7 @@ class Learner(Process):
         return returns
 
 
-    def V_trace(self, values, rewards, target_behavior_ratio):
+    def V_trace(self, values, rewards, target_behavior_ratio, reset_idx):
         with torch.no_grad():
             p = torch.clamp(target_behavior_ratio, max=self.p_hat)
             c = torch.clamp(target_behavior_ratio, max=self.c_hat)
@@ -122,46 +123,43 @@ class Learner(Process):
         # Do it here for tqdm to estimate the runtime correctly
         batch = self.fetch_batch()
 
-        for episode in tqdm(range(0, self.episodes, self.batch_size), disable=False):
+        for k in tqdm(range(0, self.episodes, self.batch_size), disable=False):
             self.optimizer.zero_grad()
 
             vision, propri = batch['vision'], batch['proprioception']
-            # Output (T+1, batch, ...). Done state included; pi is torch.Distribution
-            values, pis, _ = self.model(vision, propri, batch['done'])
+            reset_idx = fetch_reset_idx(batch['done'], vision.shape[0], self.batch_size)
+            # Output (T+1, batch, 1). Done state included 
+            values, _, log_target_policy, entropy = self.model((vision, propri, reset_idx),
+                                                               action=batch['action'])
             
             rewards = batch['reward'][:-1].unsqueeze(-1) # (T, batch, 1)
 
             # The last action correspond to state T + 2 and is not in the calculation
-            # Assume action elements are independent
-            log_target_policy = pis.log_prob(batch['action'])[:-1].sum(-1, keepdim=True)
-            log_behavior_policy = batch['log_policy'][:-1].sum(-1, keepdim=True)
+            log_target_policy = log_target_policy[:-1]
+            log_behavior_policy = batch['log_policy'][:-1]
             ratio = torch.exp(log_target_policy - log_behavior_policy)
             
-            vtrace, p = self.V_trace(values, rewards, ratio)
+            vtrace, p = self.V_trace(values, rewards, ratio, reset_idx)
 
             # Gradient descent for value function (L2). The last is 0 anyway
             # (T+1, batch, 1) -> (batch,)
-            value_loss = ((vtrace - values).pow(2) / 2).sum((0, 2))
+            value_loss = ((vtrace - values).pow(2) / 2).mean((0, 2))
             # Gradient ascent for policy only
             advantage = rewards + self.discount * vtrace[1:] - values[:-1]
             # (T, batch, 1) -> (batch,)
-            policy_loss = -(p * log_target_policy * advantage.detach()).sum((0, 2)) 
+            policy_loss = -(p * log_target_policy * advantage.detach()).mean((0, 2))
+            # (T, batch, 1) -> (batch,)
+            entropy = entropy.mean((0, 2))
 
-            total_loss = value_loss * self.value_weight + policy_loss * self.policy_weight
+            total_loss = value_loss * self.value_weight + policy_loss * self.policy_weight - \
+                         entropy * self.entropy_weight
 
-            if self.entropy_bonus: # Optional entropy bonus
-                entropy = pis.entropy()[:-1].sum((0, 2)) # (T, batch, action dim) -> (batch,)
-                total_loss -= entropy * self.entropy_weight
-
-                stats['entropy'][episode:episode+self.batch_size] = entropy.detach().cpu().numpy()
-
-            stats['sum_rewards'][episode:episode+self.batch_size] = \
-                    rewards.detach().cpu().numpy().sum((0, 2))
-            stats['sum_vtrace'][episode:episode+self.batch_size] = \
-                    vtrace.detach().cpu().numpy().sum((0, 2))
-            stats['total_loss'][episode:episode+self.batch_size] = total_loss.detach().cpu().numpy()
-            stats['policy_loss'][episode:episode+self.batch_size] = policy_loss.detach().cpu().numpy()
-            stats['value_loss'][episode:episode+self.batch_size] = value_loss.detach().cpu().numpy()
+            stats['sum_rewards'][k:k+self.batch_size] = rewards.detach().cpu().numpy().mean((0, 2))
+            stats['sum_vtrace'][k:k+self.batch_size] = vtrace.detach().cpu().numpy().mean((0, 2))
+            stats['total_loss'][k:k+self.batch_size] = total_loss.detach().cpu().numpy()
+            stats['policy_loss'][k:k+self.batch_size] = policy_loss.detach().cpu().numpy()
+            stats['value_loss'][k:k+self.batch_size] = value_loss.detach().cpu().numpy()
+            stats['entropy'][k:k+self.batch_size] = entropy.detach().cpu().numpy()
 
             total_loss = total_loss.mean() if self.reduction == 'mean' else total_loss.sum()
             total_loss.backward()
@@ -171,7 +169,7 @@ class Learner(Process):
 
             self.optimizer.step()
             
-            self.save(stats, episode)
+            self.save(stats, k)
 
             # CUDA cannot be shared as `load_state_dict()` will raise error when copying between GPUs
             self.state_dict.update(copy.deepcopy(self.model.cpu().state_dict())) 
