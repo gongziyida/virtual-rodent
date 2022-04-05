@@ -116,7 +116,6 @@ class Learner(Process):
 
                 for b in range(self.batch_size): # This is a really rare event
                     if j + 1 in reset_idx[b]: # Reset
-                        print(j, reset_idx[b])
                         vtrace[j, b] = values[j]
             return vtrace.detach(), p.detach()
 

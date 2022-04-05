@@ -33,8 +33,8 @@ class Actor(ActorBase):
     
     def forward(self, state, action=None):
         x, reset_idx = state
-        mean, self.hc = iter_over_batch_with_reset(self.net, x, reset_idx, self.hc)
-        return self.make_action(mean, action)
+        rnn_out, self.hc = iter_over_batch_with_reset(self.net, x, reset_idx, self.hc)
+        return self.make_action(self.proj(rnn_out), action)
 
 
 class Critic(nn.Module):
@@ -46,5 +46,5 @@ class Critic(nn.Module):
 
     def forward(self, state):
         x, reset_idx = state
-        value, self.hc = iter_over_batch_with_reset(self.net, x, reset_idx, self.hc)
-        return value
+        rnn_out, self.hc = iter_over_batch_with_reset(self.net, x, reset_idx, self.hc)
+        return self.proj(rnn_out)
