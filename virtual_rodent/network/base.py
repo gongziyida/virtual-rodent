@@ -11,7 +11,7 @@ class ModuleBase(nn.Module):
         if len(self.encoders) > 0:
             self.encoders = nn.ModuleList(self.encoders)
             with torch.no_grad():
-                self.ft_dims = [encoders[i](torch.randn(1, *in_dim[i])).squeeze().data.shape[0]
+                self.ft_dims = [encoders[i](torch.randn(1, *in_dims[i])).squeeze().data.shape[0]
                                 for i in self.idx_encoded]
 
         self.actor = actor
@@ -62,7 +62,7 @@ class ActorBase(nn.Module):
         scale = scale.view(*([1] * len(loc.shape[:-1])), *scale.shape)
         assert len(scale.shape) == len(loc.shape)
         pi = MultivariateNormal(loc, torch.diag_embed(scale))
-        action_ = pi.sample() if action is None else action
+        action_ = pi.sample() if action is None else action.detach()
         log_prob = pi.log_prob(action_).unsqueeze(-1)
         entropy = pi.entropy().unsqueeze(-1)
         return action_, log_prob, entropy

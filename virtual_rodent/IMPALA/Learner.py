@@ -16,7 +16,7 @@ _ATTRIBUTES = ('vision', 'proprioception', 'action', 'log_policy', 'reward', 'do
 class Learner(Process):
     def __init__(self, DEVICE_ID, queue, training_done, model, state_dict, 
                  n_batches, p_hat, c_hat, save_dir,
-                 discount=0.99, entropy_bonus=True, clip_gradient=40, batch_size=5, lr=5e-4,
+                 discount=0.99, entropy_bonus=True, clip_gradient=1, batch_size=5, lr=5e-4,
                  policy_weight=1, value_weight=0.5, entropy_weight=1e-2, reduction='mean', 
                  save_window=None):
         super().__init__()
@@ -31,7 +31,7 @@ class Learner(Process):
         self.save_dir = save_dir
         self.reduction = reduction
         self.batch_size = batch_size
-        self.batch_cache = Cache(max_len=int(batch_size*1.5))
+        self.batch_cache = Cache(max_len=int(batch_size*1.2))
         self.episodes = int(n_batches * batch_size)
         self.save_window = max(self.episodes//50, 2) if save_window is None else save_window
 
@@ -45,7 +45,8 @@ class Learner(Process):
         self.state_dict = state_dict
 
         self.optimizer = torch.optim.RMSprop(model.parameters(), lr=lr, 
-                                             weight_decay=0, eps=1e-4)
+                                             weight_decay=0., eps=1e-4)
+
 
     def setup(self):
         if len(self.DEVICE_ID) > 1:
@@ -59,8 +60,9 @@ class Learner(Process):
         self.PID = os.getpid()
         print('[%s] Training on cuda %s' % (self.PID, self.DEVICE_ID))
 
-        keys = ('total_loss', 'sum_rewards', 'sum_vtrace', 'policy_loss', 'policy_weight', 
-                'value_loss', 'value_weight', 'entropy', 'entropy_weight')
+        keys = ('total_loss', 'sum_rewards', 'sum_vtrace', 'sum_values', 
+                'policy_loss', 'policy_weight', 'value_loss', 'value_weight', 
+                'entropy', 'entropy_weight')
         stats = {k: np.ones(self.episodes) * np.inf for k in keys}
         stats['policy_weight'][:] = self.policy_weight
         stats['value_weight'][:]= self.value_weight
@@ -103,20 +105,22 @@ class Learner(Process):
 
     def V_trace(self, values, rewards, target_behavior_ratio, reset_idx):
         with torch.no_grad():
+            T = rewards.shape[0]
             p = torch.clamp(target_behavior_ratio, max=self.p_hat)
             c = torch.clamp(target_behavior_ratio, max=self.c_hat)
             dV = (rewards + self.discount * values[1:] - values[:-1]) * p
-            
+
             vtrace = torch.zeros(*values.shape).to(self.device) # (T+1, batch, 1)
             vtrace[-1] = values[-1]
-            for i in range(1, len(vtrace)): 
-                j = len(vtrace) - 1 - i # Backward
+            for i in range(T): 
+                j = T - 1 - i # Backward
                 vtrace[j] = values[j] + dV[j] + \
                             self.discount * c[j] * (vtrace[j+1] - values[j+1])
-
+                
                 for b in range(self.batch_size): # This is a really rare event
                     if j + 1 in reset_idx[b]: # Reset
-                        vtrace[j, b] = values[j]
+                        vtrace[j, b] = values[j, b]
+                
             return vtrace.detach(), p.detach()
 
 
@@ -134,8 +138,8 @@ class Learner(Process):
             vision, propri = batch['vision'], batch['proprioception']
             reset_idx = fetch_reset_idx(batch['done'], vision.shape[0], self.batch_size)
             # Output (T+1, batch, 1). Done state included 
-            values, _, log_target_policy, entropy = self.model((vision, propri, reset_idx),
-                                                               action=batch['action'])
+            values, (a, log_target_policy, entropy) = self.model((vision, propri, reset_idx),
+                                                                  action=batch['action'])
             
             rewards = batch['reward'][:-1].unsqueeze(-1) # (T, batch, 1)
 
@@ -145,6 +149,7 @@ class Learner(Process):
             ratio = torch.exp(log_target_policy - log_behavior_policy)
             
             vtrace, p = self.V_trace(values, rewards, ratio, reset_idx)
+            assert (vtrace[-1] == values[-1]).all()
 
             # Gradient descent for value function (L2). The last is 0 anyway
             # (T+1, batch, 1) -> (batch,)
@@ -152,15 +157,16 @@ class Learner(Process):
             # Gradient ascent for policy only
             advantage = rewards + self.discount * vtrace[1:] - values[:-1]
             # (T, batch, 1) -> (batch,)
-            policy_loss = -(p * log_target_policy * advantage.detach()).mean((0, 2))
+            policy_loss = (-p * log_target_policy * advantage.detach()).mean((0, 2))
             # (T, batch, 1) -> (batch,)
-            entropy = entropy.mean((0, 2))
+            entropy = entropy[:-1].mean((0, 2)) 
 
             total_loss = value_loss * self.value_weight + policy_loss * self.policy_weight - \
                          entropy * self.entropy_weight
 
             stats['sum_rewards'][k:k+self.batch_size] = rewards.detach().cpu().numpy().mean((0, 2))
             stats['sum_vtrace'][k:k+self.batch_size] = vtrace.detach().cpu().numpy().mean((0, 2))
+            stats['sum_values'][k:k+self.batch_size] = values.detach().cpu().numpy().mean((0, 2))
             stats['total_loss'][k:k+self.batch_size] = total_loss.detach().cpu().numpy()
             stats['policy_loss'][k:k+self.batch_size] = policy_loss.detach().cpu().numpy()
             stats['value_loss'][k:k+self.batch_size] = value_loss.detach().cpu().numpy()

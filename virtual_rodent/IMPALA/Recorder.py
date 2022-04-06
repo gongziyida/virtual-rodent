@@ -12,7 +12,8 @@ class Recorder(Process):
         super().__init__()
         # Constants
         self.DEVICE_ID = DEVICE_ID
-        self.device = torch.device('cuda:%d' % DEVICE_ID)
+        self.device = 'cpu' if DEVICE_ID == 'cpu' else 'cuda:%d' % DEVICE_ID
+        self.device = torch.device(self.device)
         self.save_dir = save_dir
         self.save_full_record = save_full_record
 
@@ -27,9 +28,12 @@ class Recorder(Process):
 
     def set_env(self):
         self.PID = os.getpid()
-
-        os.environ['MUJOCO_GL'] = 'egl'
-        os.environ['EGL_DEVICE_ID'] = str(self.DEVICE_ID) 
+        
+        if self.DEVICE_ID == 'cpu':
+            os.environ['MUJOCO_GL'] = 'osmesa'
+        else:
+            os.environ['MUJOCO_GL'] = 'egl'
+            os.environ['EGL_DEVICE_ID'] = str(self.DEVICE_ID) 
 
         print('\n[%s] Setting env "%s" on %s with %s' % \
                 (self.PID, self.env_name, self.device, os.environ['MUJOCO_GL']))

@@ -44,10 +44,9 @@ def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=No
         # Get state, reward and discount
         vision = torch.from_numpy(get_vision(time_step)).to(device)
         proprioception = torch.from_numpy(get_proprioception(time_step, propri_attr)).to(device)
-        reward = time_step.reward
 
         reset_idx = fetch_reset_idx(done, 1, 1)
-        _, action, log_policy, _ = model((vision, proprioception, reset_idx))
+        _, (action, log_policy, _) = model((vision, proprioception, reset_idx))
 
         time_step = env.step(np.clip(action.detach().cpu().numpy(), 
                                      action_spec.minimum, action_spec.maximum))
@@ -56,7 +55,7 @@ def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=No
         returns['vision'].append(vision)
         returns['proprioception'].append(proprioception)
         returns['action'].append(action)
-        returns['reward'].append(torch.tensor(0 if reward is None else reward))
+        returns['reward'].append(torch.tensor(time_step.reward))
         returns['log_policy'].append(log_policy)
         for i in ext_cam:
             cam = env.physics.render(camera_id=i, 
@@ -68,7 +67,7 @@ def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=No
     returns['T'] = step 
     return returns
 
-
+# Depricated
 def simulator(env, model, propri_attr, device,
               ext_cam=(), ext_cam_size=(200, 200)):
     """Simulation generator, starts from beginning, and reset upon simulation timeout

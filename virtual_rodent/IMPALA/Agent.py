@@ -69,6 +69,6 @@ class Agent(Process):
                 vision, proprioception, done = self.fetch_input()
 
                 reset_idx = fetch_reset_idx(done, 1, self.batch_size)
-                _, actions, log_policies, _ = self.model((vision, proprioception, reset_idx))
+                _, (actions, log_policies, _) = self.model((vision, proprioception, reset_idx))
 
                 self.send_action(actions, log_policies)

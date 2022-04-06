@@ -22,7 +22,7 @@ class TestModel(ModuleBase):
         action, log_prob, entropy = self.actor((ft_emb, reset_idx), action)
         value = self.critic((ft_emb, reset_idx))
 
-        return value, action, log_prob, entropy
+        return value, (action, log_prob, entropy)
 
 class Actor(ActorBase):
     def __init__(self, in_dim, action_dim, hidden_dim=8):

@@ -75,7 +75,6 @@ class Simulator(Process):
                 proprioception = torch.from_numpy(
                                         get_proprioception(time_step, self.propri_attr)
                                     ).to(self.device)
-                reward = time_step.reward
 
                 self.send_input(vision, proprioception, last_done)
                 action, log_policy = self.fetch_action()
@@ -84,20 +83,24 @@ class Simulator(Process):
                 time_step = self.env.step(np.clip(action.numpy(), 
                                           action_spec.minimum, action_spec.maximum))
                 step += 1
-                last_done = time_step.last()
+                done = time_step.last()
 
-                # Record state t, action t, reward t and done t+1; reward at start is 0
+                # Record state t, action t, reward t and done t+1
                 local_buffer['vision'].append(vision)
                 local_buffer['proprioception'].append(proprioception)
                 local_buffer['action'].append(action)
                 local_buffer['log_policy'].append(log_policy)
-                local_buffer['reward'].append(torch.tensor(0 if reward is None else reward))
-                local_buffer['done'].append(torch.tensor(last_done))
+                local_buffer['reward'].append(torch.tensor(time_step.reward if not done else -50))
+                local_buffer['done'].append(torch.tensor(done))
 
                 # Reset
-                if time_step.last(): 
+                if done: 
                     time_step = self.env.reset()
                     assert not time_step.last()
+
+                last_done = done
+
+            local_buffer['reward'][-1] = torch.tensor(-50)
 
             for k in local_buffer.keys(): # Stack list of tensor
                 local_buffer[k] = torch.stack(local_buffer[k], dim=0)

@@ -13,38 +13,38 @@ class TestModel(ModuleBase):
 
         action, log_prob, entropy = self.actor(ft_emb, action)
         value = self.critic(ft_emb)
-        return value, action, log_prob, entropy
+        return value, (action, log_prob, entropy)
 
 class Actor(ActorBase):
     def __init__(self, in_dim, action_dim):
         super().__init__(in_dim, action_dim)
         self.net = nn.Sequential(nn.Linear(in_dim, 200),
-                                   nn.LeakyReLU(),
+                                   nn.ReLU(),
                                    nn.Linear(200, action_dim))
 
-    def forward(self, x, action=None):
-        dims = x.shape
+    def forward(self, state, action=None):
+        dims = state.shape
         if len(dims) > 2: # Flatten batch dims and reshape back
-            mean = self.net(x.view(-1, dims[-1])).view(*dims[:-1], -1)
+            mean = self.net(state.view(-1, dims[-1])).view(*dims[:-1], -1)
         elif len(dims) == 1: # Add batch dim and restore
-            mean = self.net(x.unsqueeze(0)).squeeze(0)
+            mean = self.net(state.unsqueeze(0)).squeeze(0)
         else: # len == 2
-            mean = self.net(x)
+            mean = self.net(state)
         return self.make_action(mean, action)
 
 class Critic(nn.Module):
     def __init__(self, in_dim):
         super().__init__()
         self.net = nn.Sequential(nn.Linear(in_dim, 200),
-                                   nn.LeakyReLU(),
+                                   nn.ReLU(),
                                    nn.Linear(200, 1))
 
-    def forward(self, x):
-        dims = x.shape
+    def forward(self, state):
+        dims = state.shape
         if len(dims) > 2: # Flatten batch dims and reshape back
-            return self.net(x.view(-1, dims[-1])).view(*dims[:-1], 1)
+            return self.net(state.view(-1, dims[-1])).view(*dims[:-1], 1)
         elif len(dims) == 1: # Add batch dim and restore
-            return self.net(x.unsqueeze(0)).squeeze(0)
+            return self.net(state.unsqueeze(0)).squeeze(0)
         else: # len == 2
-            return self.net(x)
+            return self.net(state)
 
