@@ -41,6 +41,10 @@ def __suite_cheetah():
     from dm_control import suite
     return suite.load('cheetah', 'run'), ['position', 'velocity']
 
+def __simple_test():
+    from ._test_env import TestEnv
+    return TestEnv(), None
+
 ######## Customized environment constructors ########
 
 ######## Mapper ########
@@ -51,5 +55,6 @@ MAPPER = {
         'built-in two-touch': __builtin_2touch,
         '_test_hopper': __suite_hopper,
         '_test_cheetah': __suite_cheetah,
+        '_simple_test': __simple_test,
         }
 

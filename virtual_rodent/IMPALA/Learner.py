@@ -16,8 +16,8 @@ _ATTRIBUTES = ('vision', 'proprioception', 'action', 'log_policy', 'reward', 'do
 class Learner(Process):
     def __init__(self, DEVICE_ID, queue, training_done, model, state_dict, 
                  n_batches, p_hat, c_hat, save_dir,
-                 discount=0.99, entropy_bonus=True, clip_gradient=1, batch_size=5, lr=5e-4,
-                 policy_weight=1, value_weight=0.5, entropy_weight=1e-2, reduction='mean', 
+                 discount=0.99, entropy_bonus=True, clip_gradient=10, batch_size=5, lr=1e-4,
+                 actor_weight=1, critic_weight=0.5, entropy_weight=1e-2, reduction='mean', 
                  save_window=None):
         super().__init__()
         # Constants
@@ -25,8 +25,8 @@ class Learner(Process):
         self.discount, self.p_hat, self.c_hat = discount, p_hat, c_hat
         self.entropy_bonus = entropy_bonus
         self.clip_gradient = clip_gradient
-        self.policy_weight = policy_weight
-        self.value_weight = value_weight
+        self.actor_weight = actor_weight
+        self.critic_weight = critic_weight
         self.entropy_weight = entropy_weight
         self.save_dir = save_dir
         self.reduction = reduction
@@ -44,8 +44,10 @@ class Learner(Process):
         self.training_done = training_done
         self.state_dict = state_dict
 
-        self.optimizer = torch.optim.RMSprop(model.parameters(), lr=lr, 
-                                             weight_decay=0., eps=1e-4)
+        self.optimizer = torch.optim.RMSprop(model.parameters(), lr=lr, eps=1e-4)
+        self.scheduler = torch.optim.lr_scheduler.CyclicLR(self.optimizer, 
+                         base_lr=1e-4, max_lr=5e-4, step_size_up=3000, step_size_down=2000, 
+                         mode='triangular2')
 
 
     def setup(self):
@@ -60,12 +62,12 @@ class Learner(Process):
         self.PID = os.getpid()
         print('[%s] Training on cuda %s' % (self.PID, self.DEVICE_ID))
 
-        keys = ('total_loss', 'sum_rewards', 'sum_vtrace', 'sum_values', 
-                'policy_loss', 'policy_weight', 'value_loss', 'value_weight', 
-                'entropy', 'entropy_weight')
+        keys = ('total_loss', 'mean_rewards', 'mean_vtrace', 'mean_values', 
+                'actor_loss', 'actor_weight', 'critic_loss', 'critic_weight', 
+                'entropy', 'entropy_weight', 'learning_rate')
         stats = {k: np.ones(self.episodes) * np.inf for k in keys}
-        stats['policy_weight'][:] = self.policy_weight
-        stats['value_weight'][:]= self.value_weight
+        stats['actor_weight'][:] = self.actor_weight
+        stats['critic_weight'][:]= self.critic_weight
         stats['entropy_weight'][:] = self.entropy_weight
 
         return stats
@@ -106,21 +108,40 @@ class Learner(Process):
     def V_trace(self, values, rewards, target_behavior_ratio, reset_idx):
         with torch.no_grad():
             T = rewards.shape[0]
+            assert T == values.shape[0] - 1
             p = torch.clamp(target_behavior_ratio, max=self.p_hat)
             c = torch.clamp(target_behavior_ratio, max=self.c_hat)
             dV = (rewards + self.discount * values[1:] - values[:-1]) * p
-
+            
             vtrace = torch.zeros(*values.shape).to(self.device) # (T+1, batch, 1)
             vtrace[-1] = values[-1]
             for i in range(T): 
                 j = T - 1 - i # Backward
                 vtrace[j] = values[j] + dV[j] + \
                             self.discount * c[j] * (vtrace[j+1] - values[j+1])
-                
+            """
+                print(i, 'dV %.3f %.3f' % (dV[j].mean().item(), dV[j].var().item()), 
+                         '\tc %.3f %.3f' % (c[j].mean().item(), c[j].var().item()), 
+                         '\tvtrace+1 %.3f %.3f' % (vtrace[j+1].mean().item(), vtrace[j+1].var().item()),
+                         '\tvalues+1 %.3f %.3f' % (values[j+1].mean().item(), values[j+1].var().item()))
+            """
+            """
+            vtrace_ = torch.zeros(*values.shape).to(self.device) # (T+1, batch, 1)
+            for s in range(len(vtrace_)):
+                aux = dV[s] if s != len(vtrace_) - 1 else 0 # t == s
+                for t in range(s + 1, T): # t = s + 1 to s + T - 1
+                    aux += self.discount**(t - s) * torch.prod(c[s:t], dim=0) * dV[t]
+                vtrace_[s] = values[s] + aux
+
+            l1 = torch.abs(vtrace - vtrace_)
+            assert (l1 < 1e-15).all(), '%s\n%s\n%s' % \
+                    (l1[l1 > 1e-15].max(), torch.abs(vtrace_[l1 > 1e-15]).min(), torch.abs(vtrace[l1 > 1e-15]).min())
+            """
+            """    
                 for b in range(self.batch_size): # This is a really rare event
                     if j + 1 in reset_idx[b]: # Reset
                         vtrace[j, b] = values[j, b]
-                
+            """    
             return vtrace.detach(), p.detach()
 
 
@@ -148,28 +169,28 @@ class Learner(Process):
             log_behavior_policy = batch['log_policy'][:-1]
             ratio = torch.exp(log_target_policy - log_behavior_policy)
             
+            # print(k, '\n----------')
             vtrace, p = self.V_trace(values, rewards, ratio, reset_idx)
-            assert (vtrace[-1] == values[-1]).all()
 
-            # Gradient descent for value function (L2). The last is 0 anyway
+            # Gradient descent for value function (L2). 
             # (T+1, batch, 1) -> (batch,)
-            value_loss = ((vtrace - values).pow(2) / 2).mean((0, 2))
+            critic_loss = nn.functional.mse_loss(values, vtrace, reduction='none').mean((0, 2)) 
             # Gradient ascent for policy only
             advantage = rewards + self.discount * vtrace[1:] - values[:-1]
             # (T, batch, 1) -> (batch,)
-            policy_loss = (-p * log_target_policy * advantage.detach()).mean((0, 2))
+            actor_loss = (-p * log_target_policy * advantage.detach()).mean((0, 2))
             # (T, batch, 1) -> (batch,)
             entropy = entropy[:-1].mean((0, 2)) 
 
-            total_loss = value_loss * self.value_weight + policy_loss * self.policy_weight - \
+            total_loss = critic_loss * self.critic_weight + actor_loss * self.actor_weight - \
                          entropy * self.entropy_weight
 
-            stats['sum_rewards'][k:k+self.batch_size] = rewards.detach().cpu().numpy().mean((0, 2))
-            stats['sum_vtrace'][k:k+self.batch_size] = vtrace.detach().cpu().numpy().mean((0, 2))
-            stats['sum_values'][k:k+self.batch_size] = values.detach().cpu().numpy().mean((0, 2))
+            stats['mean_rewards'][k:k+self.batch_size] = rewards.detach().cpu().numpy().mean((0, 2))
+            stats['mean_vtrace'][k:k+self.batch_size] = vtrace.detach().cpu().numpy().mean((0, 2))
+            stats['mean_values'][k:k+self.batch_size] = values.detach().cpu().numpy().mean((0, 2))
             stats['total_loss'][k:k+self.batch_size] = total_loss.detach().cpu().numpy()
-            stats['policy_loss'][k:k+self.batch_size] = policy_loss.detach().cpu().numpy()
-            stats['value_loss'][k:k+self.batch_size] = value_loss.detach().cpu().numpy()
+            stats['actor_loss'][k:k+self.batch_size] = actor_loss.detach().cpu().numpy()
+            stats['critic_loss'][k:k+self.batch_size] = critic_loss.detach().cpu().numpy()
             stats['entropy'][k:k+self.batch_size] = entropy.detach().cpu().numpy()
 
             total_loss = total_loss.mean() if self.reduction == 'mean' else total_loss.sum()
@@ -179,7 +200,9 @@ class Learner(Process):
                 nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_gradient)
 
             self.optimizer.step()
-            
+            self.scheduler.step()
+            stats['learning_rate'][k:k+self.batch_size] = self.scheduler.get_last_lr()
+
             self.save(stats, k)
 
             # CUDA cannot be shared as `load_state_dict()` will raise error when copying between GPUs

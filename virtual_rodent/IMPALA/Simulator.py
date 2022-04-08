@@ -71,6 +71,7 @@ class Simulator(Process):
             step = 0
             while step <= self.max_step:
                 # Get state, reward and discount
+                
                 vision = torch.from_numpy(get_vision(time_step)).to(self.device)
                 proprioception = torch.from_numpy(
                                         get_proprioception(time_step, self.propri_attr)
@@ -78,19 +79,28 @@ class Simulator(Process):
 
                 self.send_input(vision, proprioception, last_done)
                 action, log_policy = self.fetch_action()
+                """
+                vision = torch.ones(1).to(self.device)
+                proprioception = torch.from_numpy(time_step.state).to(self.device)
+                self.send_input(vision, proprioception, torch.zeros(1))
+                action, log_policy = self.fetch_action()
 
                 # Proceed
+                time_step = self.env.step(action.numpy())
+                """
                 time_step = self.env.step(np.clip(action.numpy(), 
                                           action_spec.minimum, action_spec.maximum))
+                
                 step += 1
                 done = time_step.last()
+                reward = time_step.reward #if not done else -50
 
                 # Record state t, action t, reward t and done t+1
                 local_buffer['vision'].append(vision)
                 local_buffer['proprioception'].append(proprioception)
                 local_buffer['action'].append(action)
                 local_buffer['log_policy'].append(log_policy)
-                local_buffer['reward'].append(torch.tensor(time_step.reward if not done else -50))
+                local_buffer['reward'].append(torch.tensor(reward))
                 local_buffer['done'].append(torch.tensor(done))
 
                 # Reset
@@ -100,7 +110,7 @@ class Simulator(Process):
 
                 last_done = done
 
-            local_buffer['reward'][-1] = torch.tensor(-50)
+            # local_buffer['reward'][-1] = torch.tensor(-50)
 
             for k in local_buffer.keys(): # Stack list of tensor
                 local_buffer[k] = torch.stack(local_buffer[k], dim=0)
