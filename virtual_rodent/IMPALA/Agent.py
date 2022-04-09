@@ -5,6 +5,7 @@ import torch
 from torch.multiprocessing import Process
 
 from virtual_rodent.network.helper import fetch_reset_idx
+from .exception import TrainingTerminated 
 
 QUEUE, ACTION_MADE, INPUT_GIVEN = 0, 1, 2
 
@@ -30,6 +31,8 @@ class Agent(Process):
         for i in range(self.batch_size):
             self.action_traffic[i][INPUT_GIVEN].wait()
             self.action_traffic[i][INPUT_GIVEN].clear()
+            if self.exit.value == 1:
+                raise TrainingTerminated
 
             inputs = self.action_traffic[i][QUEUE].get()
             vision.append(inputs[0])
@@ -51,7 +54,7 @@ class Agent(Process):
             actions, log_policies = actions.unsqueeze(0), log_policies.unsqueeze(0)
         for i in range(self.batch_size): 
             assert actions.shape[0] == 1 and log_policies.shape[0] == 1, '%s, %s' % (actions.shape, log_policies.shape)
-            self.action_traffic[i][QUEUE].put((actions[0, i], log_policies[0, i]))
+            self.action_traffic[i][QUEUE].put((actions[0, i].detach().cpu(), log_policies[0, i].detach().cpu()))
             self.action_traffic[i][ACTION_MADE].set()
 
     def run(self):
@@ -65,8 +68,11 @@ class Agent(Process):
                     self.model.load_state_dict(self.state_dict)
                     self.model = self.model.to(self.device)
                 step += 1
-
-                vision, proprioception, done = self.fetch_input()
+                
+                try:
+                    vision, proprioception, done = self.fetch_input()
+                except TrainingTerminated:
+                    break
 
                 reset_idx = fetch_reset_idx(done, 1, self.batch_size)
                 _, (actions, log_policies, _) = self.model((vision, proprioception, reset_idx))

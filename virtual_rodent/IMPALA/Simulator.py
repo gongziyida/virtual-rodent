@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from torch.multiprocessing import Process
 
+from .exception import TrainingTerminated 
 from virtual_rodent.environment import MAPPER
 
 QUEUE, ACTION_MADE, INPUT_GIVEN = 0, 1, 2
@@ -33,10 +34,10 @@ class Simulator(Process):
             os.environ['MUJOCO_GL'] = 'egl'
             os.environ['EGL_DEVICE_ID'] = str(self.DEVICE_ID) 
 
-        print('\n[%s] Setting env "%s" on %s with %s' % \
+        print('[%s] Setting env "%s" on %s with %s' % \
                 (self.PID, self.env_name, self.device, os.environ['MUJOCO_GL']))
         self.env, self.propri_attr = MAPPER[self.env_name]()
-        print('\n[%s] Simulating on env "%s"' % (self.PID, self.env_name))
+        print('[%s] Simulating on env "%s"' % (self.PID, self.env_name))
 
 
     def send_input(self, vision, proprioception, last_done):
@@ -46,9 +47,11 @@ class Simulator(Process):
     def fetch_action(self):
         self.action_traffic[ACTION_MADE].wait()
         self.action_traffic[ACTION_MADE].clear()
+        if self.exit.value == 1:
+            raise TrainingTerminated
         output = self.action_traffic[QUEUE].get()
-        action = output[0].detach().cpu()
-        log_policy = output[1].detach().cpu()
+        action = output[0].detach().cpu().clone()
+        log_policy = output[1].detach().cpu().clone()
         return action, log_policy
 
     def run(self):
@@ -69,7 +72,7 @@ class Simulator(Process):
             local_buffer = dict(vision=[], proprioception=[], action=[], 
                                 log_policy=[], reward=[], done=[torch.tensor(True)])
             step = 0
-            while step <= self.max_step:
+            while step < self.max_step:
                 # Get state, reward and discount
                 
                 vision = torch.from_numpy(get_vision(time_step)).to(self.device)
@@ -78,7 +81,10 @@ class Simulator(Process):
                                     ).to(self.device)
 
                 self.send_input(vision, proprioception, last_done)
-                action, log_policy = self.fetch_action()
+                try:
+                    action, log_policy = self.fetch_action()
+                except TrainingTerminated:
+                    break
                 """
                 vision = torch.ones(1).to(self.device)
                 proprioception = torch.from_numpy(time_step.state).to(self.device)
@@ -88,12 +94,12 @@ class Simulator(Process):
                 # Proceed
                 time_step = self.env.step(action.numpy())
                 """
-                time_step = self.env.step(np.clip(action.numpy(), 
+                time_step = self.env.step(np.clip(action.numpy(), \
                                           action_spec.minimum, action_spec.maximum))
                 
                 step += 1
                 done = time_step.last()
-                reward = time_step.reward #if not done else -50
+                reward = time_step.reward 
 
                 # Record state t, action t, reward t and done t+1
                 local_buffer['vision'].append(vision)
@@ -110,7 +116,6 @@ class Simulator(Process):
 
                 last_done = done
 
-            # local_buffer['reward'][-1] = torch.tensor(-50)
 
             for k in local_buffer.keys(): # Stack list of tensor
                 local_buffer[k] = torch.stack(local_buffer[k], dim=0)

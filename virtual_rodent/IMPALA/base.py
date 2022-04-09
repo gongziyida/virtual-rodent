@@ -13,6 +13,7 @@ from .Recorder import Recorder
 set_start_method('spawn', force=True)
 _N_CUDA = torch.cuda.device_count()
 
+
 class IMPALA:
     def __init__(self, env_name, model, save_dir):
         """ Multi-actor-single-learner IMPALA in Pytorch
@@ -31,7 +32,7 @@ class IMPALA:
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir, exist_ok=True)
 
-    def train(self, max_step, max_episode, model_update_freq=None, batch_size=10, repeat=1,
+    def train(self, max_step, max_episodes, model_update_freq=None, batch_size=10, repeat=1,
               simulator_params={}, learner_params={}):
         training_done = Value('I', 0) # 'I' unsigned int
         sample_queue = Queue()
@@ -64,7 +65,7 @@ class IMPALA:
         learner = Learner(learner_devices, sample_queue, training_done, self.model, 
                           state_dict, p_hat=1, c_hat=1,
                           save_dir=self.save_dir, 
-                          n_batches=max_episode//batch_size, 
+                          max_episodes=max_episodes, 
                           batch_size=batch_size, 
                           **learner_params)
         learner.start()
@@ -78,12 +79,16 @@ class IMPALA:
                 simulator.kill()
             return
 
-        actor.join(timeout=3)
-        actor.terminate()
+        for (_, action_made, input_given) in action_traffic:
+            action_made.set()
+            input_given.set()
+
+        actor.join()
+        #actor.terminate()
 
         for simulator in simulators:
-            simulator.join(timeout=3)
-            simulator.terminate()
+            simulator.join()
+            #simulator.terminate()
 
         self.model, _ = load_checkpoint(self.model, os.path.join(self.save_dir, 'model.pt'))
 

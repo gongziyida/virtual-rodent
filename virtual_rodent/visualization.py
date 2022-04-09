@@ -56,3 +56,15 @@ def plot_smooth_training_curve(t, val, n_subsamples=100, **kwargs):
     plt.plot(list(range(0, len(val), window)), smoothed)
     plt.ylim([min(smoothed) - abs(min(smoothed)) * 0.2, 
               max(smoothed) + abs(max(smoothed)) * 0.2])
+
+def plot_rewards(rewards, save_path, n_subsamples=100):
+    fig, ax = plt.subplots(1, figsize=(5, 5))
+    plt.plot(rewards, alpha=0.5)
+    window = int(len(rewards)//n_subsamples) if len(rewards) > n_subsamples * 5 else 10
+    smoothed = [rewards[i:i+window].mean() for i in range(0, len(rewards), window)]
+    ax.plot(list(range(0, len(rewards), window)), smoothed)
+    ax.set_ylim([min(smoothed) - abs(min(smoothed)) * 0.2, 
+                 max(smoothed) + abs(max(smoothed)) * 0.2])
+    fig.tight_layout()
+    fig.savefig(save_path)
+    return fig, ax

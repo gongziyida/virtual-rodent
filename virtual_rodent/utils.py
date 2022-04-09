@@ -14,7 +14,8 @@ class Cache:
             self._cache.pop(0)
 
     def sample(self, num):
-        return random.sample(self._cache, num)
+        batch = random.sample(self._cache, num)
+        return batch
 
     def set_max_len(self, val):
         self._max_len = val
@@ -42,7 +43,7 @@ def stats_to_dataframe(stats, exclude=[], key_alias={}):
     for k, v in stats.items():
         if k in exclude:
             continue
-        data = list(v[v < np.inf])
+        data = list(v)
         df['episode'] += list(range(len(data)))
         df['val'] += data
         name = key_alias.get(k, k)

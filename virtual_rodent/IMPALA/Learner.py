@@ -15,10 +15,10 @@ _ATTRIBUTES = ('vision', 'proprioception', 'action', 'log_policy', 'reward', 'do
 
 class Learner(Process):
     def __init__(self, DEVICE_ID, queue, training_done, model, state_dict, 
-                 n_batches, p_hat, c_hat, save_dir,
-                 discount=0.99, entropy_bonus=True, clip_gradient=10, batch_size=5, lr=1e-4,
+                 max_episodes, p_hat, c_hat, save_dir,
+                 discount=0.99, entropy_bonus=True, clip_gradient=1, batch_size=5, lr=1e-4,
                  actor_weight=1, critic_weight=0.5, entropy_weight=1e-2, reduction='mean', 
-                 save_window=None):
+                 lr_scheduler=False, save_window=None):
         super().__init__()
         # Constants
         self.DEVICE_ID = DEVICE_ID
@@ -31,9 +31,12 @@ class Learner(Process):
         self.save_dir = save_dir
         self.reduction = reduction
         self.batch_size = batch_size
-        self.batch_cache = Cache(max_len=int(batch_size*1.2))
-        self.episodes = int(n_batches * batch_size)
-        self.save_window = max(self.episodes//50, 2) if save_window is None else save_window
+        self.batch_cache = Cache(max_len=int(batch_size*20))
+        self.episode = 0
+        self.max_episodes = max_episodes
+        self.save_window = max(self.max_episodes//50, 2) if save_window is None else save_window
+
+        self.rewards = []
 
         self.model = model
 
@@ -45,9 +48,12 @@ class Learner(Process):
         self.state_dict = state_dict
 
         self.optimizer = torch.optim.RMSprop(model.parameters(), lr=lr, eps=1e-4)
-        self.scheduler = torch.optim.lr_scheduler.CyclicLR(self.optimizer, 
-                         base_lr=1e-4, max_lr=5e-4, step_size_up=3000, step_size_down=2000, 
-                         mode='triangular2')
+        if lr_scheduler:
+            self.scheduler = torch.optim.lr_scheduler.CyclicLR(self.optimizer, 
+                             base_lr=lr, max_lr=lr*5, step_size_up=5000, step_size_down=5000, 
+                             mode='triangular2')
+        else: 
+            self.scheduler = None
 
 
     def setup(self):
@@ -62,39 +68,34 @@ class Learner(Process):
         self.PID = os.getpid()
         print('[%s] Training on cuda %s' % (self.PID, self.DEVICE_ID))
 
-        keys = ('total_loss', 'mean_rewards', 'mean_vtrace', 'mean_values', 
-                'actor_loss', 'actor_weight', 'critic_loss', 'critic_weight', 
-                'entropy', 'entropy_weight', 'learning_rate')
-        stats = {k: np.ones(self.episodes) * np.inf for k in keys}
-        stats['actor_weight'][:] = self.actor_weight
-        stats['critic_weight'][:]= self.critic_weight
-        stats['entropy_weight'][:] = self.entropy_weight
+        keys = ('total_loss', 'mean_vtrace', 'mean_values', 
+                'actor_loss', 'critic_loss', 'entropy', 'learning_rate')
+        stats = {k: [] for k in keys}
 
         return stats
 
     
     def fetch_new_sample(self):
         try:
-            x = self.queue.get(timeout=0.01)
+            x = self.queue.get(timeout=0.05)
             sample = dict()
             for k in x.keys():
             # Map to current device
                 sample[k] = x[k].to(self.device) if torch.is_tensor(x[k]) else x[k]
             del x # Free the link to the Providers' memory
             self.batch_cache.add(sample)
+            rewards = sample['reward'].detach().cpu().numpy()
+            self.rewards.append(rewards.sum() / rewards.shape[0])
+            self.episode += 1
         except Empty:
-            return
+            return 
 
     def fetch_batch(self):
-        counter = 0
-        while not self.queue.empty() and counter < self.batch_size: # Consume
+        while len(self.batch_cache) < self.batch_size: # Get enough samples first
             self.fetch_new_sample()
-            counter += 1
-        while len(self.batch_cache) <= self.batch_size: # Get enough samples first
-            if self.queue.empty():
-                time.sleep(0.1)
+        while not self.queue.empty():
             self.fetch_new_sample()
-        
+
         batch = self.batch_cache.sample(num=self.batch_size) # list of dict
         returns = {k: [b[k] for b in batch] for k in _ATTRIBUTES}
 
@@ -107,42 +108,44 @@ class Learner(Process):
 
     def V_trace(self, values, rewards, target_behavior_ratio, reset_idx):
         with torch.no_grad():
-            T = rewards.shape[0]
-            assert T == values.shape[0] - 1
             p = torch.clamp(target_behavior_ratio, max=self.p_hat)
             c = torch.clamp(target_behavior_ratio, max=self.c_hat)
-            dV = (rewards + self.discount * values[1:] - values[:-1]) * p
+            next_values = torch.zeros_like(values)
+            next_values[:-1] = values[1:]
+            assert next_values.shape == values.shape
+            assert (next_values[-1] == 0).all()
+            for i in reset_idx:
+                assert len(i) == 2, reset_idx
+            dV = (rewards + self.discount * next_values - values) * p
             
-            vtrace = torch.zeros(*values.shape).to(self.device) # (T+1, batch, 1)
-            vtrace[-1] = values[-1]
-            for i in range(T): 
-                j = T - 1 - i # Backward
-                vtrace[j] = values[j] + dV[j] + \
-                            self.discount * c[j] * (vtrace[j+1] - values[j+1])
+            vtrace = torch.zeros_like(values) # (T, batch, 1)
+            # vtrace[-1] = values[-1]
+            for i in range(1, vtrace.shape[0]): 
+                j = vtrace.shape[0] - 1 - i # Backward
+                diff = 0 if i == 0 else self.discount * c[j] * (vtrace[j+1] - values[j+1])
+                vtrace[j] = values[j] + dV[j] + diff
+                """
+                if i > 0:
+                    print(i, 'dV %.3f %.3f' % (dV[j].mean().item(), dV[j].var().item()), 
+                             '\tc %.3f %.3f' % (c[j].mean().item(), c[j].var().item()), 
+                             '\tvtrace+1 %.3f %.3f' % (vtrace[j+1].mean().item(), vtrace[j+1].var().item()),
+                             '\tvalues+1 %.3f %.3f' % (values[j+1].mean().item(), values[j+1].var().item()))
+                """
+            
+            advantage = torch.zeros_like(values)
+            advantage[:-1] = rewards[:-1] + self.discount * vtrace[1:] - values[:-1]
+            advantage[-1] = rewards[-1] - values[-1]
+            
             """
-                print(i, 'dV %.3f %.3f' % (dV[j].mean().item(), dV[j].var().item()), 
-                         '\tc %.3f %.3f' % (c[j].mean().item(), c[j].var().item()), 
-                         '\tvtrace+1 %.3f %.3f' % (vtrace[j+1].mean().item(), vtrace[j+1].var().item()),
-                         '\tvalues+1 %.3f %.3f' % (values[j+1].mean().item(), values[j+1].var().item()))
-            """
-            """
-            vtrace_ = torch.zeros(*values.shape).to(self.device) # (T+1, batch, 1)
+            vtrace_ = torch.zeros_like(values) # (T, batch, 1)
             for s in range(len(vtrace_)):
                 aux = dV[s] if s != len(vtrace_) - 1 else 0 # t == s
                 for t in range(s + 1, T): # t = s + 1 to s + T - 1
                     aux += self.discount**(t - s) * torch.prod(c[s:t], dim=0) * dV[t]
                 vtrace_[s] = values[s] + aux
-
-            l1 = torch.abs(vtrace - vtrace_)
-            assert (l1 < 1e-15).all(), '%s\n%s\n%s' % \
-                    (l1[l1 > 1e-15].max(), torch.abs(vtrace_[l1 > 1e-15]).min(), torch.abs(vtrace[l1 > 1e-15]).min())
+            assert (vtrace_ - vtrace) < 1e-10
             """
-            """    
-                for b in range(self.batch_size): # This is a really rare event
-                    if j + 1 in reset_idx[b]: # Reset
-                        vtrace[j, b] = values[j, b]
-            """    
-            return vtrace.detach(), p.detach()
+            return vtrace.detach(), p.detach(), advantage.detach()
 
 
     def run(self):
@@ -153,7 +156,7 @@ class Learner(Process):
         # Do it here for tqdm to estimate the runtime correctly
         batch = self.fetch_batch()
 
-        for k in tqdm(range(0, self.episodes, self.batch_size), disable=False):
+        for k in tqdm(range(0, self.max_episodes, self.batch_size), disable=False):
             self.optimizer.zero_grad()
 
             vision, propri = batch['vision'], batch['proprioception']
@@ -161,37 +164,35 @@ class Learner(Process):
             # Output (T+1, batch, 1). Done state included 
             values, (a, log_target_policy, entropy) = self.model((vision, propri, reset_idx),
                                                                   action=batch['action'])
-            
-            rewards = batch['reward'][:-1].unsqueeze(-1) # (T, batch, 1)
+            # print(log_target_policy)
+            rewards = batch['reward'].unsqueeze(-1) # (T, batch, 1)
 
             # The last action correspond to state T + 2 and is not in the calculation
-            log_target_policy = log_target_policy[:-1]
-            log_behavior_policy = batch['log_policy'][:-1]
+            log_target_policy = log_target_policy
+            log_behavior_policy = batch['log_policy']
             ratio = torch.exp(log_target_policy - log_behavior_policy)
             
-            # print(k, '\n----------')
-            vtrace, p = self.V_trace(values, rewards, ratio, reset_idx)
+            vtrace, p, advantage = self.V_trace(values, rewards, ratio, reset_idx)
 
             # Gradient descent for value function (L2). 
             # (T+1, batch, 1) -> (batch,)
             critic_loss = nn.functional.mse_loss(values, vtrace, reduction='none').mean((0, 2)) 
             # Gradient ascent for policy only
-            advantage = rewards + self.discount * vtrace[1:] - values[:-1]
             # (T, batch, 1) -> (batch,)
-            actor_loss = (-p * log_target_policy * advantage.detach()).mean((0, 2))
+            actor_loss = (-p * log_target_policy * advantage).mean((0, 2))
             # (T, batch, 1) -> (batch,)
-            entropy = entropy[:-1].mean((0, 2)) 
+            entropy = entropy.mean((0, 2)) 
+            # print(critic_loss, actor_loss, entropy, sep='\n')
 
             total_loss = critic_loss * self.critic_weight + actor_loss * self.actor_weight - \
                          entropy * self.entropy_weight
 
-            stats['mean_rewards'][k:k+self.batch_size] = rewards.detach().cpu().numpy().mean((0, 2))
-            stats['mean_vtrace'][k:k+self.batch_size] = vtrace.detach().cpu().numpy().mean((0, 2))
-            stats['mean_values'][k:k+self.batch_size] = values.detach().cpu().numpy().mean((0, 2))
-            stats['total_loss'][k:k+self.batch_size] = total_loss.detach().cpu().numpy()
-            stats['actor_loss'][k:k+self.batch_size] = actor_loss.detach().cpu().numpy()
-            stats['critic_loss'][k:k+self.batch_size] = critic_loss.detach().cpu().numpy()
-            stats['entropy'][k:k+self.batch_size] = entropy.detach().cpu().numpy()
+            stats['mean_vtrace'] += list(vtrace.detach().cpu().numpy().mean((0, 2)))
+            stats['mean_values'] += list(values.detach().cpu().numpy().mean((0, 2)))
+            stats['total_loss'] += list(total_loss.detach().cpu().numpy())
+            stats['actor_loss'] += list(actor_loss.detach().cpu().numpy())
+            stats['critic_loss'] += list(critic_loss.detach().cpu().numpy())
+            stats['entropy'] += list(entropy.detach().cpu().numpy())
 
             total_loss = total_loss.mean() if self.reduction == 'mean' else total_loss.sum()
             total_loss.backward()
@@ -200,8 +201,9 @@ class Learner(Process):
                 nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_gradient)
 
             self.optimizer.step()
-            self.scheduler.step()
-            stats['learning_rate'][k:k+self.batch_size] = self.scheduler.get_last_lr()
+            if self.scheduler is not None:
+                self.scheduler.step()
+                stats['learning_rate'] += [self.scheduler.get_last_lr()] * self.batch_size
 
             self.save(stats, k)
 
@@ -218,10 +220,11 @@ class Learner(Process):
 
     def save(self, stats, episode):
         t = time.time() - self.last_saved
-        if (t > 1200) or (episode % (self.episodes//10) == 0) or (episode == self.episodes - 1):
+        if (t > 1200) or (episode % (self.max_episodes//10) == 0) or (episode == self.max_episodes - 1):
             save_checkpoint(self.model, episode, os.path.join(self.save_dir, 'model.pt'))
 
-        if episode % (self.episodes//10) == 0 or episode == self.episodes - self.batch_size:
+        if episode % (self.max_episodes//10) == 0 or episode == self.max_episodes - self.batch_size:
             # Update the stats periodically
             with open(os.path.join(self.save_dir, 'training_stats.pkl'), 'wb') as f:
                 pickle.dump(stats, f, protocol=pickle.HIGHEST_PROTOCOL)
+            np.save(os.path.join(self.save_dir, 'rewards.npy'), np.array(self.rewards))
