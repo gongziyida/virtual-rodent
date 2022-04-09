@@ -49,7 +49,13 @@ class Simulator(Process):
         self.action_traffic[ACTION_MADE].clear()
         if self.exit.value == 1:
             raise TrainingTerminated
-        output = self.action_traffic[QUEUE].get()
+        try:
+            output = self.action_traffic[QUEUE].get()
+        except (FileNotFoundError, ConnectionResetError) as e:
+            if self.exit.value == 1:
+                raise TrainingTerminated
+            else:
+                raise
         action = output[0].detach().cpu().clone()
         log_policy = output[1].detach().cpu().clone()
         return action, log_policy

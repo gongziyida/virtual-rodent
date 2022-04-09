@@ -50,7 +50,7 @@ class Learner(Process):
         self.optimizer = torch.optim.RMSprop(model.parameters(), lr=lr, eps=1e-4)
         if lr_scheduler:
             self.scheduler = torch.optim.lr_scheduler.CyclicLR(self.optimizer, 
-                             base_lr=lr, max_lr=lr*5, step_size_up=5000, step_size_down=5000, 
+                             base_lr=lr, max_lr=lr*5, step_size_up=10000, step_size_down=10000, 
                              mode='triangular2')
         else: 
             self.scheduler = None
