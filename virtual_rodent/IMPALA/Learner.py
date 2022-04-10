@@ -50,7 +50,7 @@ class Learner(Process):
         self.optimizer = torch.optim.RMSprop(model.parameters(), lr=lr, eps=1e-4)
         if lr_scheduler:
             self.scheduler = torch.optim.lr_scheduler.CyclicLR(self.optimizer, 
-                             base_lr=lr, max_lr=lr*5, step_size_up=10000, step_size_down=10000, 
+                             base_lr=lr, max_lr=lr * 5, step_size_up=10000, step_size_down=10000, 
                              mode='triangular2')
         else: 
             self.scheduler = None
@@ -203,8 +203,8 @@ class Learner(Process):
             self.optimizer.step()
             if self.scheduler is not None:
                 self.scheduler.step()
-                stats['learning_rate'] += [self.scheduler.get_last_lr()] * self.batch_size
-
+                aux = [self.scheduler.get_last_lr()] * self.batch_size
+                stats['learning_rate'] += aux
             self.save(stats, k)
 
             # CUDA cannot be shared as `load_state_dict()` will raise error when copying between GPUs
