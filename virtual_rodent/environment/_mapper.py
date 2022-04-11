@@ -33,7 +33,11 @@ def __builtin_2touch():
     return rodent_two_touch(), RODENT_PROPRIOCEPTION_ATTRIBUTES
 
 
-def __suite_hopper():
+def __suite_hopper_stand():
+    from dm_control import suite
+    return suite.load('hopper', 'stand'), ['position', 'velocity', 'touch']
+
+def __suite_hopper_hop():
     from dm_control import suite
     return suite.load('hopper', 'hop'), ['position', 'velocity', 'touch']
 
@@ -53,8 +57,10 @@ MAPPER = {
         'built-in gaps': __builtin_gaps,
         'built-in maze': __builtin_maze,
         'built-in two-touch': __builtin_2touch,
-        '_test_hopper': __suite_hopper,
+        '_test_hopper_stand': __suite_hopper_stand,
+        '_test_hopper_hop': __suite_hopper_hop,
         '_test_cheetah': __suite_cheetah,
         '_simple_test': __simple_test,
         }
 
+ENV_NAMES = MAPPER.keys()
