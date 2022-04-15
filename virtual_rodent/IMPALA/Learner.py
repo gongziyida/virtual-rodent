@@ -2,7 +2,6 @@ import os, time, pickle
 import copy
 from tqdm import tqdm
 from queue import Empty # Exception
-import numpy as np
 import torch
 import torch.nn as nn
 from torch.multiprocessing import Process
@@ -21,7 +20,12 @@ class Learner(Process):
                  lr_scheduler=False, save_window=None):
         super().__init__()
         # Constants
-        self.DEVICE_ID = DEVICE_ID
+        if hasattr(DEVICE_ID, '__iter__'):
+            self.DEVICE_ID = DEVICE_ID
+            self.N_DEVICES = len(DEVICE_ID)
+        elif type(DEVICE_ID) == int:
+            self.DEVICE_ID = 'cpu'
+            self.N_DEVICES = DEVICE_ID
         self.discount, self.p_hat, self.c_hat = discount, p_hat, c_hat
         self.entropy_bonus = entropy_bonus
         self.clip_gradient = clip_gradient
@@ -36,7 +40,7 @@ class Learner(Process):
         self.max_episodes = max_episodes
         self.save_window = max(self.max_episodes//50, 2) if save_window is None else save_window
 
-        self.rewards = []
+        self.rewards = dict()
 
         self.model = model
 
@@ -57,16 +61,21 @@ class Learner(Process):
 
 
     def setup(self):
-        if len(self.DEVICE_ID) > 1:
-            os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(i) for i in self.DEVICE_ID])
-            self.device = torch.device('cuda')
-            self.model = nn.DataParallel(self.model, dim=1).to(self.device) # Batch second
-        else:
-            self.device = torch.device('cuda:%d' % self.DEVICE_ID[0])
-            self.model = self.model.to(self.device)
-
         self.PID = os.getpid()
-        print('[%s] Training on cuda %s' % (self.PID, self.DEVICE_ID))
+        if self.DEVICE_ID == 'cpu':
+            torch.set_num_threads(self.N_DEVICES)
+            self.device = torch.device('cpu')
+            print('[%s] Training on %d CPUs' % (self.PID, self.N_DEVICES))
+        else:
+            if self.N_DEVICES > 1:
+                os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(i) for i in self.DEVICE_ID])
+                self.device = torch.device('cuda')
+                self.model = nn.DataParallel(self.model, dim=1).to(self.device) # Batch second
+            else:
+                self.device = torch.device('cuda:%d' % self.DEVICE_ID[0])
+                self.model = self.model.to(self.device)
+
+            print('[%s] Training on cuda %s' % (self.PID, self.DEVICE_ID))
 
         keys = ('total_loss', 'mean_vtrace', 'mean_values', 
                 'actor_loss', 'critic_loss', 'entropy', 'learning_rate')
@@ -78,17 +87,21 @@ class Learner(Process):
     def fetch_new_sample(self):
         try:
             x = self.queue.get(timeout=0.05)
+            env_name = x['env_name']
             sample = dict()
-            for k in x.keys():
-            # Map to current device
+            for k in x.keys(): # Map to current device
+                if k == 'env_name':
+                    continue
                 sample[k] = x[k].to(self.device) if torch.is_tensor(x[k]) else x[k]
-            del x # Free the link to the Providers' memory
             self.batch_cache.add(sample)
             rewards = sample['reward'].detach().cpu().numpy()
-            self.rewards.append(rewards.sum() / rewards.shape[0])
+            rewards = rewards.sum() / rewards.shape[0]
+            self.rewards[env_name].append(rewards)
             self.episode += 1
         except Empty:
             return 
+        except KeyError:
+            self.rewards[env_name] = [rewards]
 
     def fetch_batch(self):
         while len(self.batch_cache) < self.batch_size: # Get enough samples first
@@ -227,4 +240,5 @@ class Learner(Process):
             # Update the stats periodically
             with open(os.path.join(self.save_dir, 'training_stats.pkl'), 'wb') as f:
                 pickle.dump(stats, f, protocol=pickle.HIGHEST_PROTOCOL)
-            np.save(os.path.join(self.save_dir, 'rewards.npy'), np.array(self.rewards))
+            with open(os.path.join(self.save_dir, 'rewards.pkl'), 'wb') as f:
+                pickle.dump(self.rewards, f, protocol=pickle.HIGHEST_PROTOCOL)

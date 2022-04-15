@@ -9,12 +9,12 @@ import virtual_rodent.network.Merel2019 as Merel2019
 from virtual_rodent.IMPALA import IMPALA
 from virtual_rodent.utils import load_checkpoint
 
-def run(env, lr): 
+def run(env, lr, ratio_cpu): 
     vision_enc = ResNet18Enc()
     vision_emb_dim = vision_enc.get_emb_dim(VISION_DIM)
 
-    propri_emb_dim = 100 # propri_dim
-    propri_enc = MLPEnc(PROPRI_DIM[0], propri_emb_dim, hidden_dims=(300,))
+    propri_emb_dim = 50 # propri_dim
+    propri_enc = MLPEnc(PROPRI_DIM[0], propri_emb_dim, hidden_dims=(100,))
 
     critic_in_dim = vision_emb_dim + propri_emb_dim
     critic = Merel2019.Critic(critic_in_dim)
@@ -30,11 +30,11 @@ def run(env, lr):
     impala = IMPALA(env, model, './out_rnn_%s_rodent_%.0E' % (folder_name, lr))
     
     # Note repeat should be smaller than the number of CPU cores available - 3
-    impala.train(max_step=300, max_episodes=int(1e3), repeat=int(7//len(env)), batch_size=5,
-                 learner_params={'lr': lr , 'lr_scheduler': False})
+    impala.train(max_step=500, max_episodes=int(500), repeat=int(36//len(env)), batch_size=5,
+                 learner_params={'lr': lr , 'lr_scheduler': False}, ratio_cpu=ratio_cpu)
     
     # Generate videos
-    impala.record()
+    # impala.record()
     
 
 if __name__ == '__main__':
@@ -45,4 +45,7 @@ if __name__ == '__main__':
      #'built-in maze', 
      'built-in two-touch',
     ]
-    run(envs, 1e-4)
+    run(envs, 1e-4, 1/2)
+    run(envs, 1e-4, 1/3)
+    run(envs, 1e-4, 1/4)
+    run(envs, 1e-4, 1/5)

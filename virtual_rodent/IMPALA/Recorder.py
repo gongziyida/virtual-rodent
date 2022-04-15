@@ -11,9 +11,17 @@ class Recorder(Process):
                  simulator_params={}, save_full_record=False): 
         super().__init__()
         # Constants
-        self.DEVICE_ID = DEVICE_ID
-        self.device = 'cpu' if DEVICE_ID == 'cpu' else 'cuda:%d' % DEVICE_ID
-        self.device = torch.device(self.device)
+        if hasattr(DEVICE_ID, '__iter__'):
+            if len(DEVICE_ID) == 1:
+                self.DEVICE_ID = DEVICE_ID[0]
+                self.N_DEVICES = 1
+            else:
+                raise NotImplementedError
+            self.device = torch.device('cuda:%d' % self.DEVICE_ID)
+        elif type(DEVICE_ID) == int:
+            self.DEVICE_ID = 'cpu'
+            self.N_DEVICES = DEVICE_ID
+            self.device = torch.device('cpu')
         self.save_dir = save_dir
         self.save_full_record = save_full_record
 
@@ -46,7 +54,6 @@ class Recorder(Process):
         if str(os.environ['SIMULATOR_IMPALA']) == 'rodent':
             from virtual_rodent.simulation import simulate
         else:
-            print('testing')
             from virtual_rodent._test_simulation import simulate
 
         with torch.no_grad():

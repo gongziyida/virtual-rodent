@@ -10,10 +10,11 @@ from virtual_rodent.environment import MAPPER
 QUEUE, ACTION_MADE, INPUT_GIVEN = 0, 1, 2
 
 class Simulator(Process):
-    def __init__(self, DEVICE_ID, sample_queue, exit, action_traffic, 
+    def __init__(self, ID, DEVICE_ID, sample_queue, exit, action_traffic, 
                  env_name, max_step):
         super().__init__()
         # Constants
+        self.ID = ID
         self.DEVICE_ID = DEVICE_ID
         self.max_step = max_step 
         self.device = torch.device('cpu' if DEVICE_ID == 'cpu' else 'cuda:%d' % DEVICE_ID)
@@ -30,21 +31,27 @@ class Simulator(Process):
 
         if self.DEVICE_ID == 'cpu':
             os.environ['MUJOCO_GL'] = 'osmesa'
+            torch.set_num_threads(1)
         else: # dm_control/mujoco maps onto EGL_DEVICE_ID
             os.environ['MUJOCO_GL'] = 'egl'
             os.environ['EGL_DEVICE_ID'] = str(self.DEVICE_ID) 
-
+        
+        """
         print('[%s] Setting env "%s" on %s with %s' % \
                 (self.PID, self.env_name, self.device, os.environ['MUJOCO_GL']))
+        """
         self.env, self.propri_attr = MAPPER[self.env_name]()
+        """
         print('[%s] Simulating on env "%s"' % (self.PID, self.env_name))
-
+        """
 
     def send_input(self, vision, proprioception, last_done):
         self.action_traffic[QUEUE].put((vision, proprioception, torch.tensor([last_done, False])))
         self.action_traffic[INPUT_GIVEN].set()
+        # print(self.ID, 'sent input to the agent.')
 
     def fetch_action(self):
+        # print(self.ID, 'waiting for agent response...')
         self.action_traffic[ACTION_MADE].wait()
         self.action_traffic[ACTION_MADE].clear()
         if self.exit.value == 1:
@@ -65,7 +72,6 @@ class Simulator(Process):
         if str(os.environ['SIMULATOR_IMPALA']) == 'rodent':
             from virtual_rodent.simulation import get_vision, get_proprioception
         else:
-            print('testing')
             from virtual_rodent._test_simulation import get_vision, get_proprioception
 
         action_spec = self.env.action_spec()
@@ -125,6 +131,8 @@ class Simulator(Process):
 
             for k in local_buffer.keys(): # Stack list of tensor
                 local_buffer[k] = torch.stack(local_buffer[k], dim=0)
+
+            local_buffer['env_name'] = self.env_name
 
             self.sample_queue.put(local_buffer)
 

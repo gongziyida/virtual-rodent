@@ -57,7 +57,7 @@ def plot_smooth_training_curve(t, val, n_subsamples=100, **kwargs):
     plt.ylim([min(smoothed) - abs(min(smoothed)) * 0.2, 
               max(smoothed) + abs(max(smoothed)) * 0.2])
 
-def plot_rewards(rewards, save_path, n_subsamples=100):
+def plot_rewards_numpy(rewards, save_path, n_subsamples=100):
     fig, ax = plt.subplots(1, figsize=(5, 5))
     plt.plot(rewards, alpha=0.5)
     window = int(len(rewards)//n_subsamples) if len(rewards) > n_subsamples * 5 else 10
@@ -65,6 +65,25 @@ def plot_rewards(rewards, save_path, n_subsamples=100):
     ax.plot(list(range(0, len(rewards), window)), smoothed)
     ax.set_ylim([min(smoothed) - abs(min(smoothed)) * 0.2, 
                  max(smoothed) + abs(max(smoothed)) * 0.2])
+    fig.tight_layout()
+    fig.savefig(save_path)
+    return fig, ax
+
+def plot_rewards_dict(rewards, save_path, n_subsamples=100):
+    n = len(rewards.keys())
+    nrows = int(n // 3) if n % 3 == 0 else int(n // 3 + 1)
+    ncols = n if nrows == 1 else 3
+    fig, ax = plt.subplots(ncols=ncols, nrows=nrows, figsize=(6*ncols, 5*nrows))
+    ax = ax.flatten()
+    for i, (k, r) in enumerate(rewards.items()):
+        r = np.array(r)
+        ax[i].plot(r, alpha=0.5)
+        ax[i].set_title(k)
+        window = int(len(r)//n_subsamples) if len(r) > n_subsamples * 5 else 10
+        smoothed = [r[i:i+window].mean() for i in range(0, len(r), window)]
+        ax[i].plot(list(range(0, len(r), window)), smoothed)
+        ax[i].set_ylim([min(smoothed) - abs(min(smoothed)) * 0.2, 
+                     max(smoothed) + abs(max(smoothed)) * 0.2])
     fig.tight_layout()
     fig.savefig(save_path)
     return fig, ax

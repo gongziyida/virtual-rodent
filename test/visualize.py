@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 
 from virtual_rodent.utils import stats_to_dataframe
-from virtual_rodent.visualization import plot_stats, plot_smooth_training_curve, plot_rewards
+from virtual_rodent.visualization import *
 
 paths = [
         #'out_mlp_hopper_hop_1E-04',
@@ -24,8 +24,12 @@ if __name__ == '__main__':
 
             plot_stats(df, os.path.join(paths[i], 'training_stats.png'), plot=plot_smooth_training_curve)
 
-            rewards = np.load(os.path.join(paths[i], 'rewards.npy'))
-            plot_rewards(rewards, os.path.join(paths[i], 'rewards.png'))
+            with open(os.path.join(paths[i], 'rewards.pkl'), 'rb') as f:
+                rewards = pickle.load(f)
+
+            plot_rewards_dict(rewards, os.path.join(paths[i], 'rewards.png'))
+            # rewards = np.load(os.path.join(paths[i], 'rewards.npy'))
+            # plot_rewards_numpy(rewards, os.path.join(paths[i], 'rewards.png'))
 
         except FileNotFoundError as e:
             print(e)
