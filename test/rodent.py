@@ -30,7 +30,7 @@ def run(env, lr, ratio_cpu):
     impala = IMPALA(env, model, './out_rnn_%s_rodent_%.0E' % (folder_name, lr))
     
     # Note repeat should be smaller than the number of CPU cores available - 3
-    impala.train(max_step=500, max_episodes=int(500), repeat=int(36//len(env)), batch_size=5,
+    impala.train(max_step=500, max_episodes=int(500), repeat=int(12//len(env)), batch_size=5,
                  learner_params={'lr': lr , 'lr_scheduler': False}, ratio_cpu=ratio_cpu)
     
     # Generate videos
@@ -45,7 +45,6 @@ if __name__ == '__main__':
      #'built-in maze', 
      'built-in two-touch',
     ]
-    run(envs, 1e-4, 1/2)
-    run(envs, 1e-4, 1/3)
-    run(envs, 1e-4, 1/4)
-    run(envs, 1e-4, 1/5)
+    run(envs, 1e-4, 0.9)
+    run(envs, 1e-4, 0.7)
+    run(envs, 1e-4, 0.5)

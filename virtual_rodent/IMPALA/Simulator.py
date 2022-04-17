@@ -2,48 +2,22 @@ import os, time
 import copy
 import numpy as np
 import torch
-from torch.multiprocessing import Process
 
-from .exception import TrainingTerminated 
-from virtual_rodent.environment import MAPPER
+from .base import WorkerBase, TrainingTerminated 
 
 QUEUE, ACTION_MADE, INPUT_GIVEN = 0, 1, 2
 
-class Simulator(Process):
-    def __init__(self, ID, DEVICE_ID, sample_queue, exit, action_traffic, 
+class Simulator(WorkerBase):
+    def __init__(self, ID, DEVICE_INFO, sample_queue, exit, action_traffic, 
                  env_name, max_step):
-        super().__init__()
+        super().__init__(ID, DEVICE_INFO, env_name=env_name)
         # Constants
-        self.ID = ID
-        self.DEVICE_ID = DEVICE_ID
         self.max_step = max_step 
-        self.device = torch.device('cpu' if DEVICE_ID == 'cpu' else 'cuda:%d' % DEVICE_ID)
 
         # Shared resources
         self.sample_queue = sample_queue
         self.action_traffic = action_traffic
         self.exit = exit
-        # Environment name; instantiate when started
-        self.env_name = env_name
-
-    def set_env(self):
-        self.PID = os.getpid()
-
-        if self.DEVICE_ID == 'cpu':
-            os.environ['MUJOCO_GL'] = 'osmesa'
-            torch.set_num_threads(1)
-        else: # dm_control/mujoco maps onto EGL_DEVICE_ID
-            os.environ['MUJOCO_GL'] = 'egl'
-            os.environ['EGL_DEVICE_ID'] = str(self.DEVICE_ID) 
-        
-        """
-        print('[%s] Setting env "%s" on %s with %s' % \
-                (self.PID, self.env_name, self.device, os.environ['MUJOCO_GL']))
-        """
-        self.env, self.propri_attr = MAPPER[self.env_name]()
-        """
-        print('[%s] Simulating on env "%s"' % (self.PID, self.env_name))
-        """
 
     def send_input(self, vision, proprioception, last_done):
         self.action_traffic[QUEUE].put((vision, proprioception, torch.tensor([last_done, False])))
@@ -68,7 +42,7 @@ class Simulator(Process):
         return action, log_policy
 
     def run(self):
-        self.set_env()
+        self.setup()
         if str(os.environ['SIMULATOR_IMPALA']) == 'rodent':
             from virtual_rodent.simulation import get_vision, get_proprioception
         else:

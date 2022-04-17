@@ -1,3 +1,0 @@
-class TrainingTerminated(Exception):
-    pass
-

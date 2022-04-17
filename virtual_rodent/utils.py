@@ -23,8 +23,9 @@ class Cache:
     def __len__(self):
         return len(self._cache)
 
-def save_checkpoint(model, epoch, save_path, optimizer=None):
-    d = {'model_state_dict': model.state_dict(), 'epoch': epoch}
+def save_checkpoint(model, epoch, save_path, optimizer=None): 
+    state_dict = model.state_dict() if isinstance(model, torch.nn.Module) else model
+    d = {'model_state_dict': state_dict, 'epoch': epoch}
     if optimizer is not None:
         d['optimizer_state_dict'] = optimizer.state_dict()
     torch.save(d, save_path)

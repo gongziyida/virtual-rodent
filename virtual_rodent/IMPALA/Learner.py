@@ -1,55 +1,50 @@
-import os, time, pickle
+import os, time
 import copy
 from tqdm import tqdm
 from queue import Empty # Exception
 import torch
 import torch.nn as nn
-from torch.multiprocessing import Process
 
 from virtual_rodent.network.helper import fetch_reset_idx
-from virtual_rodent.utils import save_checkpoint, Cache
+from virtual_rodent.utils import Cache
+from .base import WorkerBase
 
 _ATTRIBUTES = ('vision', 'proprioception', 'action', 'log_policy', 'reward', 'done')
 
+def prepare_store(**kwargs):
+    d = dict()
+    for k, v in kwargs.items():
+        if k in ('vtrace', 'value'):
+            d['mean_' + k] = v.detach().cpu().numpy().mean((0, 2))
+        else:
+            d[k] = v.detach().cpu().numpy()
+    return d
 
-class Learner(Process):
-    def __init__(self, DEVICE_ID, queue, training_done, model, state_dict, 
-                 max_episodes, p_hat, c_hat, save_dir,
+class Learner(WorkerBase):
+    def __init__(self, ID, DEVICE_INFO, queue, recorder, training_done, model, state_dict, 
+                 max_episodes, p_hat, c_hat,
                  discount=0.99, entropy_bonus=True, clip_gradient=1, batch_size=5, lr=1e-4,
                  actor_weight=1, critic_weight=0.5, entropy_weight=1e-2, reduction='mean', 
                  lr_scheduler=False, save_window=None):
-        super().__init__()
+        super().__init__(ID, DEVICE_INFO, model)
         # Constants
-        if hasattr(DEVICE_ID, '__iter__'):
-            self.DEVICE_ID = DEVICE_ID
-            self.N_DEVICES = len(DEVICE_ID)
-        elif type(DEVICE_ID) == int:
-            self.DEVICE_ID = 'cpu'
-            self.N_DEVICES = DEVICE_ID
         self.discount, self.p_hat, self.c_hat = discount, p_hat, c_hat
         self.entropy_bonus = entropy_bonus
         self.clip_gradient = clip_gradient
         self.actor_weight = actor_weight
         self.critic_weight = critic_weight
         self.entropy_weight = entropy_weight
-        self.save_dir = save_dir
         self.reduction = reduction
         self.batch_size = batch_size
         self.batch_cache = Cache(max_len=int(batch_size*20))
         self.episode = 0
         self.max_episodes = max_episodes
-        self.save_window = max(self.max_episodes//50, 2) if save_window is None else save_window
-
-        self.rewards = dict()
-
-        self.model = model
-
-        self.last_saved = time.time()
 
         # Shared resources
         self.queue = queue
         self.training_done = training_done
         self.state_dict = state_dict
+        self.recorder = recorder
 
         self.optimizer = torch.optim.RMSprop(model.parameters(), lr=lr, eps=1e-4)
         if lr_scheduler:
@@ -58,30 +53,6 @@ class Learner(Process):
                              mode='triangular2')
         else: 
             self.scheduler = None
-
-
-    def setup(self):
-        self.PID = os.getpid()
-        if self.DEVICE_ID == 'cpu':
-            torch.set_num_threads(self.N_DEVICES)
-            self.device = torch.device('cpu')
-            print('[%s] Training on %d CPUs' % (self.PID, self.N_DEVICES))
-        else:
-            if self.N_DEVICES > 1:
-                os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(i) for i in self.DEVICE_ID])
-                self.device = torch.device('cuda')
-                self.model = nn.DataParallel(self.model, dim=1).to(self.device) # Batch second
-            else:
-                self.device = torch.device('cuda:%d' % self.DEVICE_ID[0])
-                self.model = self.model.to(self.device)
-
-            print('[%s] Training on cuda %s' % (self.PID, self.DEVICE_ID))
-
-        keys = ('total_loss', 'mean_vtrace', 'mean_values', 
-                'actor_loss', 'critic_loss', 'entropy', 'learning_rate')
-        stats = {k: [] for k in keys}
-
-        return stats
 
     
     def fetch_new_sample(self):
@@ -95,19 +66,19 @@ class Learner(Process):
                 sample[k] = x[k].to(self.device) if torch.is_tensor(x[k]) else x[k]
             self.batch_cache.add(sample)
             rewards = sample['reward'].detach().cpu().numpy()
-            rewards = rewards.sum() / rewards.shape[0]
-            self.rewards[env_name].append(rewards)
+            self.recorder.put((env_name, rewards.sum() / rewards.shape[0]))
             self.episode += 1
         except Empty:
             return 
-        except KeyError:
-            self.rewards[env_name] = [rewards]
 
     def fetch_batch(self):
         while len(self.batch_cache) < self.batch_size: # Get enough samples first
             self.fetch_new_sample()
-        while not self.queue.empty():
+        if self.DEVICE_ID == 'cpu':
             self.fetch_new_sample()
+        else: # Greedy
+            while not self.queue.empty():
+                self.fetch_new_sample()
 
         batch = self.batch_cache.sample(num=self.batch_size) # list of dict
         returns = {k: [b[k] for b in batch] for k in _ATTRIBUTES}
@@ -162,7 +133,7 @@ class Learner(Process):
 
 
     def run(self):
-        stats = self.setup()
+        self.setup()
 
         # (T+1 or T, batch, ...) for tensors, (batch)(T+1 or T)(...) for lists
         # First batch takes longer to wait. 
@@ -199,13 +170,10 @@ class Learner(Process):
 
             total_loss = critic_loss * self.critic_weight + actor_loss * self.actor_weight - \
                          entropy * self.entropy_weight
-
-            stats['mean_vtrace'] += list(vtrace.detach().cpu().numpy().mean((0, 2)))
-            stats['mean_values'] += list(values.detach().cpu().numpy().mean((0, 2)))
-            stats['total_loss'] += list(total_loss.detach().cpu().numpy())
-            stats['actor_loss'] += list(actor_loss.detach().cpu().numpy())
-            stats['critic_loss'] += list(critic_loss.detach().cpu().numpy())
-            stats['entropy'] += list(entropy.detach().cpu().numpy())
+            
+            self.recorder.put(prepare_store(total_loss=total_loss, actor_loss=actor_loss,
+                                            critic_loss=critic_loss, entropy=entropy,
+                                            vtrace=vtrace, value=values))
 
             total_loss = total_loss.mean() if self.reduction == 'mean' else total_loss.sum()
             total_loss.backward()
@@ -214,11 +182,10 @@ class Learner(Process):
                 nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_gradient)
 
             self.optimizer.step()
+            self.model._dummy += 1
             if self.scheduler is not None:
                 self.scheduler.step()
                 aux = [self.scheduler.get_last_lr()] * self.batch_size
-                stats['learning_rate'] += aux
-            self.save(stats, k)
 
             # CUDA cannot be shared as `load_state_dict()` will raise error when copying between GPUs
             self.state_dict.update(copy.deepcopy(self.model.cpu().state_dict())) 
@@ -227,18 +194,8 @@ class Learner(Process):
             batch = self.fetch_batch()
 
         with self.training_done.get_lock():
-            self.training_done.value = 1
+            self.training_done.value += 1
         del self.batch_cache # Free the storage of variables from the producers
 
 
-    def save(self, stats, episode):
-        t = time.time() - self.last_saved
-        if (t > 1200) or (episode % (self.max_episodes//10) == 0) or (episode == self.max_episodes - 1):
-            save_checkpoint(self.model, episode, os.path.join(self.save_dir, 'model.pt'))
 
-        if episode % (self.max_episodes//10) == 0 or episode == self.max_episodes - self.batch_size:
-            # Update the stats periodically
-            with open(os.path.join(self.save_dir, 'training_stats.pkl'), 'wb') as f:
-                pickle.dump(stats, f, protocol=pickle.HIGHEST_PROTOCOL)
-            with open(os.path.join(self.save_dir, 'rewards.pkl'), 'wb') as f:
-                pickle.dump(self.rewards, f, protocol=pickle.HIGHEST_PROTOCOL)

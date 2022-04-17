@@ -2,36 +2,23 @@ import os, time, tqdm
 import copy
 import numpy as np
 import torch
-from torch.multiprocessing import Process
 
 from virtual_rodent.network.helper import fetch_reset_idx
-from .exception import TrainingTerminated 
+from .base import WorkerBase, TrainingTerminated 
 
 QUEUE, ACTION_MADE, INPUT_GIVEN = 0, 1, 2
 
-class Agent(Process):
-    def __init__(self, DEVICE_ID, action_traffic, exit, model, state_dict, 
+class CentralizedAgent(WorkerBase):
+    def __init__(self, DEVICE_INFO, action_traffic, exit, model, state_dict, 
                  batch_size, max_step, model_update_freq):
-        super().__init__()
+        super().__init__(0, DEVICE_INFO, model)
         # Constants
-        if hasattr(DEVICE_ID, '__iter__'):
-            if len(DEVICE_ID) == 1:
-                self.DEVICE_ID = DEVICE_ID[0]
-                self.N_DEVICES = 1
-            else:
-                raise NotImplementedError
-            self.device = torch.device('cuda:%d' % self.device_id)
-        elif type(DEVICE_ID) == int:
-            self.DEVICE_ID = 'cpu'
-            self.N_DEVICES = DEVICE_ID
-            self.device = torch.device('cpu')
         self.batch_size = batch_size
         self.max_step = max_step
         self.model_update_freq = model_update_freq
         self.n_simulators = len(action_traffic)
 
         # Variables
-        self.model = model.to(self.device) 
         self.state_dict = state_dict
 
         # Shared resources
@@ -72,14 +59,7 @@ class Agent(Process):
 
 
     def run(self):
-        self.PID = os.getpid()
-        if self.DEVICE_ID == 'cpu':
-            torch.set_num_threads(self.N_DEVICES)
-            """
-            print('[%s] Setting actor on %d CPUs' % (self.PID, self.N_DEVICES))
-        else:
-            print('[%s] Setting actor on %s' % (self.PID, self.device))
-            """
+        self.setup()
 
         with torch.no_grad():
             print('Preparing init batch...')

@@ -1,1 +1,2 @@
-from .base import IMPALA
+from .IMPALA_GPU import IMPALA_GPU
+from .IMPALA_CPU import IMPALA_CPU

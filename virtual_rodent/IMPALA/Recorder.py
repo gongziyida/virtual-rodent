@@ -1,56 +1,76 @@
-import os, time
-import copy
+import os, time, pickle
 import torch
+
 from torch.multiprocessing import Process
-
-from virtual_rodent.environment import MAPPER
 from virtual_rodent.visualization import video
+from virtual_rodent.utils import save_checkpoint
+from .base import WorkerBase
 
-class Recorder(Process):
-    def __init__(self, DEVICE_ID, model, env_name, save_dir,
-                 simulator_params={}, save_full_record=False): 
+class StatsRecorder(Process):
+    def __init__(self, state_dict, queue, exit, save_dir):
         super().__init__()
+        self.queue = queue
+
+        self.training_stats_keys = ('total_loss', 'mean_vtrace', 'mean_value', 
+                                    'actor_loss', 'critic_loss', 'entropy', 'learning_rate')
+        self.training_stats = {k: [] for k in self.training_stats_keys}
+
+        self.reward_stats = dict()
+
+        self.state_dict = state_dict
+
+        self.exit, self.exit_value = exit
+        self.save_dir = save_dir
+
+    def record_training(self, **kwargs):
+        for k, v in kwargs.items():
+            self.training_stats[k] += list(v)
+
+    def record_reward(self, env_name, reward):
+        try:
+            self.reward_stats[env_name].append(reward)
+        except KeyError:
+            self.reward_stats[env_name] = [reward]
+
+    def save(self):
+        save_checkpoint(dict(self.state_dict), None, os.path.join(self.save_dir, 'model.pt'))
+        # Update the stats periodically
+        with open(os.path.join(self.save_dir, 'training_stats.pkl'), 'wb') as f:
+            pickle.dump(self.training_stats, f, protocol=pickle.HIGHEST_PROTOCOL)
+        with open(os.path.join(self.save_dir, 'rewards.pkl'), 'wb') as f:
+            pickle.dump(self.reward_stats, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def run(self):
+        last_saved = time.time()
+        while self.exit.value != self.exit_value:
+            time.sleep(30)
+            while not self.queue.empty():
+                x = self.queue.get()
+                if type(x) == tuple:
+                    self.record_reward(*x)
+                elif type(x) == dict:
+                    self.record_training(**x)
+            
+            if time.time() - last_saved > 3 * 60:
+                self.save()
+                last_saved = time.time()
+        self.save()
+
+
+class VideoRecorder(WorkerBase):
+    def __init__(self, ID, DEVICE_INFO, model, env_name, save_dir,
+                 simulator_params={}, save_full_record=False): 
+        super().__init__(ID, DEVICE_INFO, model, env_name)
         # Constants
-        if hasattr(DEVICE_ID, '__iter__'):
-            if len(DEVICE_ID) == 1:
-                self.DEVICE_ID = DEVICE_ID[0]
-                self.N_DEVICES = 1
-            else:
-                raise NotImplementedError
-            self.device = torch.device('cuda:%d' % self.DEVICE_ID)
-        elif type(DEVICE_ID) == int:
-            self.DEVICE_ID = 'cpu'
-            self.N_DEVICES = DEVICE_ID
-            self.device = torch.device('cpu')
         self.save_dir = save_dir
         self.save_full_record = save_full_record
 
         # Simulator parameters
         self.simulator_params = simulator_params
 
-        # Variables
-        self.model = model.to(self.device) # Need disabling CPU binding
-
-        # Environment name; instantiate when started
-        self.env_name = env_name
-
-    def set_env(self):
-        self.PID = os.getpid()
-        
-        if self.DEVICE_ID == 'cpu':
-            os.environ['MUJOCO_GL'] = 'osmesa'
-        else:
-            os.environ['MUJOCO_GL'] = 'egl'
-            os.environ['EGL_DEVICE_ID'] = str(self.DEVICE_ID) 
-
-        print('\n[%s] Setting env "%s" on %s with %s' % \
-                (self.PID, self.env_name, self.device, os.environ['MUJOCO_GL']))
-        self.env, self.propri_attr = MAPPER[self.env_name]()
-        print('\n[%s] Simulating on env "%s" for recording' % (self.PID, self.env_name))
-
-
     def run(self):
-        self.set_env()
+        self.setup()
+        print('\n[%s] Simulating on env "%s" for recording' % (self.PID, self.env_name))
         if str(os.environ['SIMULATOR_IMPALA']) == 'rodent':
             from virtual_rodent.simulation import simulate
         else:

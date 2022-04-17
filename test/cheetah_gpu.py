@@ -3,12 +3,10 @@ from itertools import product
 import torch
 import torch.nn as nn
 from virtual_rodent.network.propri_enc import MLPEnc
-from virtual_rodent.IMPALA import IMPALA
+from virtual_rodent.IMPALA import IMPALA_GPU as IMPALA
 from virtual_rodent.utils import load_checkpoint
 
-# env, propri_dim, action_dim = '_test_hopper', 15, 4
 env, propri_dim, action_dim = '_test_cheetah', 17, 6
-# env, propri_dim, action_dim = '_simple_test', 2, 2
 
 def run(a, lr):
     
@@ -23,16 +21,10 @@ def run(a, lr):
     critic = TestModel.Critic(emb_dim)
     model = TestModel.TestModel(propri_enc, [propri_dim], actor, critic, action_dim) 
     # model, _ = load_checkpoint(model, './simple_test_IMPALA_out_%s/model.pt' % a)
-    """
-    import virtual_rodent.network._simple as TestModel
-    actor = TestModel.Actor()
-    critic = TestModel.Critic()
-    model = TestModel.TestModel(actor, critic) 
-    """
-    impala = IMPALA([env], model, './out_%s_cheetah_%.0E' % (a, lr))
+    impala = IMPALA([env], model, './out_gpu_%s_cheetah_%.0E' % (a, lr))
     
     # Note repeat should be smaller than the number of CPU cores available - 3
-    impala.train(max_step=300, max_episodes=int(1e6), repeat=45, batch_size=20,
+    impala.train(max_step=300, max_episodes=int(5e5), repeat=45, batch_size=25,
                  learner_params={'lr': lr , 'lr_scheduler': False})
     
     # Generate videos

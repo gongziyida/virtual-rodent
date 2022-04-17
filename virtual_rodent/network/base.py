@@ -18,6 +18,8 @@ class ModuleBase(nn.Module):
         self.critic = critic
         self.action_dim = action_dim
 
+        self._dummy = nn.Parameter(torch.tensor(1), requires_grad=False)
+
     def encode(self, inputs):
         if len(self.idx_encoded) == 0:
             return inputs
