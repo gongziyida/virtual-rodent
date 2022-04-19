@@ -7,13 +7,15 @@ from virtual_rodent.network.helper import fetch_reset_idx
 from .base import WorkerBase, TrainingTerminated 
 
 class DistributedAgent(WorkerBase):
-    def __init__(self, ID, DEVICE_INFO, sample_queue, exit, model, 
-                 env_name, max_step):
+    def __init__(self, ID, DEVICE_INFO, sample_queue, exit, model, state_dict
+                 env_name, max_step, model_update_freq):
         super().__init__(ID, DEVICE_INFO, model, env_name)
         # Constants
-        self.max_step = max_step 
+        self.max_step = max_step
+        self.model_update_freq = model_update_freq
 
         # Shared resources
+        self.state_dict = state_dict
         self.sample_queue = sample_queue
         self.exit, self.exit_value = exit
 
@@ -25,9 +27,15 @@ class DistributedAgent(WorkerBase):
             from virtual_rodent._test_simulation import get_vision, get_proprioception
 
         action_spec = self.env.action_spec()
-       
+
+        episode = 0
         with torch.no_grad():
             while self.exit.value != self.exit_value:
+                if episode % self.model_update_freq == 0:
+                    self.model.load_state_dict(self.state_dict)
+                    self.model = self.model.to(self.device)
+                episode += 1
+
                 time_step = self.env.reset()
                 last_done = True
 
