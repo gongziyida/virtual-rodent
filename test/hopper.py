@@ -32,8 +32,7 @@ def run(a, task, lr):
     impala = IMPALA([env + '_' + task], model, './out_%s_hopper_%s_%.0E' % (a, task, lr))
     
     # Note repeat should be smaller than the number of CPU cores available - 3
-    impala.train(max_step=300, max_episodes=int(1e6), repeat=45, batch_size=20,
-                 learner_params={'lr': lr , 'lr_scheduler': False})
+    impala.train(max_step=300, max_episodes=int(1e6), repeat=45, batch_size=20, lr=lr)
     
     # Generate videos
     impala.record()

@@ -1,12 +1,15 @@
 import torch
 import torch.nn as nn
+from typing import List
 
+@torch.jit.script
 def fetch_reset_idx(done, T, batch):
-    reset_idx = []
+    # type: (Tensor, int, int) -> List[List[int]]
+    reset_idx = torch.jit.annotate(List[List[int]], [])
     assert batch == done.shape[1], '%d, %d' % (batch, done.shape[1])
     for i in range(done.shape[1]):
         assert T == done.shape[0] - 1, '%d, %d' % (T, done.shape[0])  # Including state -1
-        li = []
+        li = torch.jit.annotate(List[int], [])
         for t in range(done.shape[0]): # Here t is actually state t-1
             if done[t, i]: # Done after action on state t-1
                 li.append(t) # Note that state t should be included
@@ -28,7 +31,6 @@ def iter_over_batch_with_reset(rnn, rnn_input, reset_idx, rnn_hc_init):
                     rnn_out, rnn_hc = rnn(rnn_input[:idx[j], i:i+1])
                 else: # Continue from last time
                     assert len(rnn_hc_init[i]) == 2
-                    assert type(rnn_hc_init[i]) is tuple
                     rnn_out, rnn_hc = rnn(rnn_input[:idx[j], i:i+1], rnn_hc_init[i])
             elif j != len(idx) - 1: # reset
                 rnn_out, rnn_hc = rnn(rnn_input[idx[j]:idx[j+1], i:i+1])

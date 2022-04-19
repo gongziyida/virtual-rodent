@@ -15,6 +15,7 @@ set_start_method('spawn', force=True)
 class IMPALA_CPU(IMPALABase):
     def __init__(self, env_name, model, save_dir):
         super().__init__(env_name, model, save_dir)
+        # self.model = torch.jit.script(self.model)
 
     def train(self, max_step, max_episodes, model_update_freq=5, batch_size=10, repeat=1,
               simulator_params={}, learner_params={}, cpu_per_actor=2, cpu_per_learner=2):
@@ -29,6 +30,7 @@ class IMPALA_CPU(IMPALABase):
         print('Setting %d simulators...' % (repeat * len(self.env_name)))
         behavior_model = copy.deepcopy(self.model)
         behavior_model.share_memory()
+
         simulators = []
         action_traffic = []
         for k in range(repeat):

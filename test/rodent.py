@@ -30,8 +30,7 @@ def run(env, lr, ratio_cpu):
     impala = IMPALA(env, model, './out_rnn_%s_rodent_%.0E' % (folder_name, lr))
     
     # Note repeat should be smaller than the number of CPU cores available - 3
-    impala.train(max_step=500, max_episodes=int(500), repeat=int(12//len(env)), batch_size=5,
-                 learner_params={'lr': lr , 'lr_scheduler': False}, ratio_cpu=ratio_cpu)
+    impala.train(max_step=500, max_episodes=int(500), repeat=int(12//len(env)), batch_size=5, lr=lr)
     
     # Generate videos
     # impala.record()

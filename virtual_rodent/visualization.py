@@ -74,7 +74,7 @@ def plot_rewards_dict(rewards, save_path, n_subsamples=100):
     nrows = int(n // 3) if n % 3 == 0 else int(n // 3 + 1)
     ncols = n if nrows == 1 else 3
     fig, ax = plt.subplots(ncols=ncols, nrows=nrows, figsize=(6*ncols, 5*nrows))
-    ax = ax.flatten()
+    ax = ax.flatten() if ncols * nrows > 1 else (ax,)
     for i, (k, r) in enumerate(rewards.items()):
         r = np.array(r)
         ax[i].plot(r, alpha=0.5)

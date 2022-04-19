@@ -48,10 +48,10 @@ class Learner(WorkerBase):
 
         self.optimizer = torch.optim.RMSprop(model.parameters(), lr=lr, eps=1e-4)
         if lr_scheduler:
-            self.scheduler = torch.optim.lr_scheduler.CyclicLR(self.optimizer, 
-                             base_lr=lr, max_lr=lr * 5, step_size_up=10000, step_size_down=10000, 
+            self.scheduler = torch.optim.lr_scheduler.CyclicLR(self.optimizer,
+                             base_lr=lr, max_lr=lr * 5, step_size_up=10000, step_size_down=10000,
                              mode='triangular2')
-        else: 
+        else:
             self.scheduler = None
 
     
@@ -146,8 +146,10 @@ class Learner(WorkerBase):
             vision, propri = batch['vision'], batch['proprioception']
             reset_idx = fetch_reset_idx(batch['done'], vision.shape[0], self.batch_size)
             # Output (T+1, batch, 1). Done state included 
-            values, (a, log_target_policy, entropy) = self.model((vision, propri, reset_idx),
-                                                                  action=batch['action'])
+            values, (a, log_target_policy, entropy) = self.model(vision=vision, 
+                                                                 propri=propri, 
+                                                                 reset_idx=reset_idx, 
+                                                                 action=batch['action'])
             # print(log_target_policy)
             rewards = batch['reward'].unsqueeze(-1) # (T, batch, 1)
 

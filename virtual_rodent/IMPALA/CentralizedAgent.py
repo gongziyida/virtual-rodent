@@ -80,7 +80,8 @@ class CentralizedAgent(WorkerBase):
                     break
 
                 reset_idx = fetch_reset_idx(done, 1, self.n_simulators)
-                _, (actions, log_policies, _) = self.model((vision, proprioception, reset_idx))
+                _, (actions, log_policies, _) = self.model(vision=vision, propri=proprioception, 
+                                                           reset_idx=reset_idx)
 
                 self.send_action(actions, log_policies, self.n_simulators)
                 

@@ -44,7 +44,8 @@ class DistributedAgent(WorkerBase):
                                         ).to(self.device)
 
                     reset_idx = fetch_reset_idx(torch.tensor([last_done, False]).unsqueeze(1), 1, 1)
-                    _, (action, log_policy, _) = self.model((vision, proprioception, reset_idx))
+                    _, (action, log_policy, _) = self.model(vision=vision, propri=proprioception, 
+                                                            reset_idx=reset_idx)
                     action, log_policy = action.view(-1), log_policy.view(-1)
 
                     time_step = self.env.step(np.clip(action.numpy(), \

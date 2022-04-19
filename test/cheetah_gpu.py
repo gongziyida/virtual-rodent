@@ -24,8 +24,7 @@ def run(a, lr):
     impala = IMPALA([env], model, './out_gpu_%s_cheetah_%.0E' % (a, lr))
     
     # Note repeat should be smaller than the number of CPU cores available - 3
-    impala.train(max_step=300, max_episodes=int(5e5), repeat=45, batch_size=25,
-                 learner_params={'lr': lr , 'lr_scheduler': False})
+    impala.train(max_step=300, max_episodes=int(5e5), repeat=45, batch_size=25, lr=lr)
     
     # Generate videos
     impala.record()

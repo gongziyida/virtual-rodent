@@ -30,9 +30,8 @@ def run(a, lr, batch_size, cpu_per_learner):
     impala = IMPALA([env], model, './out_cpu_%s_cheetah_%.0E' % (a, lr))
     
     # Note repeat should be smaller than the number of CPU cores available - 3
-    impala.train(max_step=300, max_episodes=int(5e3), repeat=20, batch_size=batch_size,
-                 cpu_per_learner=cpu_per_learner,
-                 learner_params={'lr': lr , 'lr_scheduler': False})
+    impala.train(max_step=300, max_episodes=int(1e5), repeat=20, batch_size=batch_size,
+            cpu_per_learner=cpu_per_learner, learner_params={'lr': lr})
     
     # Generate videos
     # impala.record()
@@ -40,5 +39,4 @@ def run(a, lr, batch_size, cpu_per_learner):
 
 if __name__ == '__main__':
     os.environ['SIMULATOR_IMPALA'] = 'test'
-    print('start exp: ', 3, 2)
-    run('rnn', 1e-4, b, cpl)
+    run('rnn', 1e-5, 3, 2)

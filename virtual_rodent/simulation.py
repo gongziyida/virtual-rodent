@@ -46,7 +46,7 @@ def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=No
         proprioception = torch.from_numpy(get_proprioception(time_step, propri_attr)).to(device)
 
         reset_idx = fetch_reset_idx(done, 1, 1)
-        _, (action, log_policy, _) = model((vision, proprioception, reset_idx))
+        _, (action, log_policy, _) = model(vision=vision, propri=proprioception, reset_idx=reset_idx)
 
         time_step = env.step(np.clip(action.detach().cpu().numpy(), 
                                      action_spec.minimum, action_spec.maximum))
@@ -88,7 +88,7 @@ def simulator(env, model, propri_attr, device,
         proprioception = torch.from_numpy(get_proprioception(time_step, propri_attr)).to(device)
         reward = time_step.reward
 
-        _, pi, _ = model(vision, proprioception, done)
+        _, (action, log_policy, _) = model(vision=vision, propri=proprioception, reset_idx=reset_idx)
         action = pi.sample()
         log_behavior_policy = pi.log_prob(action)
         time_step = env.step(np.clip(action.detach().cpu().numpy(), 

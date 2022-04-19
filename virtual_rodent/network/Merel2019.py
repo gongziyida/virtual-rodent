@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-from virtual_rodent.network.base import ModuleBase, ActorBase
-from virtual_rodent.network.helper import iter_over_batch_with_reset
+from virtual_rodent.network.base import ModuleBase, ActorBase, RNNBase
+# from virtual_rodent.network.helper import iter_over_batch_with_reset
 
 class MerelModel(ModuleBase):
     def __init__(self, vision_enc, propri_enc, vision_dim, propri_dim, 
@@ -16,11 +16,11 @@ class MerelModel(ModuleBase):
         assert len(v_dim) == 3 or len(v_dim) == 5
         assert len(p_dim) == 1 or len(p_dim) == 3
         if len(v_dim) == 3:
-            vision = vision.view(1, 1, *v_dim)
+            vision = vision.unsqueeze(0).unsqueeze(0)
         elif len(v_dim) != 5:
             raise ValueError(v_dim)
         if len(p_dim) == 1:
-            propri = propri.view(1, 1, *p_dim)
+            propri = propri.unsqueeze(0).unsqueeze(0)
         elif len(p_dim) != 3:
             raise ValueError(p_dim)
 
@@ -46,7 +46,7 @@ class Actor(ActorBase):
     
     def forward(self, state, action=None):
         x, reset_idx = state
-        rnn_out, self.hc = iter_over_batch_with_reset(self.net, x, reset_idx, self.hc)
+        rnn_out, self.hc = self.iter_over_batch_with_reset(x, reset_idx, self.hc)
         return self.make_action(self.proj(rnn_out), action)
 
 
@@ -60,5 +60,5 @@ class Critic(nn.Module):
 
     def forward(self, state):
         x, reset_idx = state
-        rnn_out, self.hc = iter_over_batch_with_reset(self.net, x, reset_idx, self.hc)
+        rnn_out, self.hc = self.iter_over_batch_with_reset(x, reset_idx, self.hc)
         return self.proj(rnn_out), rnn_out

@@ -13,10 +13,4 @@ class MLPEnc(nn.Module):
         self.enc = nn.Sequential(*li)
 
     def forward(self, x):
-        dims = x.shape
-        if len(dims) > 2: # Flatten batch dims and reshape back
-            return self.enc(x.view(-1, dims[-1])).view(*dims[:-1], -1)
-        elif len(dims) == 1: # Add batch dim and restore
-            return self.enc(x.unsqueeze(0)).squeeze(0)
-        else: # len == 2
-            return self.enc(x)
+        return self.enc(x) # Automatically handle reshape since it's linear

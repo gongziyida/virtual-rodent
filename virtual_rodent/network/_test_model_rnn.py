@@ -8,19 +8,18 @@ class TestModel(ModuleBase):
     def __init__(self, propri_enc, propri_dim, actor, critic, action_dim):
         super().__init__([propri_enc], [propri_dim], actor, critic, action_dim)
 
-    def forward(self, state, action=None):
-        _, propri, reset_idx = state
+    def forward(self, propri, reset_idx, vision=None, action=None):
         ft_emb = self.encode([propri])[0]
 
         # The feature embedding should have shape (T, batch, embedding)
         dims = ft_emb.shape
         if len(dims) == 1:
-            ft_emb = ft_emb.view(1, 1, *dims)
+            ft_emb = ft_emb.unsqueeze(0).unsqueeze(0)
         elif len(dims) < 3: 
             raise ValueError('%s' % dims)
         
-        action, log_prob, entropy = self.actor((ft_emb, reset_idx), action)
-        value = self.critic((ft_emb, reset_idx))
+        action, log_prob, entropy = self.actor(ft_emb, reset_idx, action)
+        value = self.critic(ft_emb, reset_idx)
 
         return value, (action, log_prob, entropy)
 
@@ -31,8 +30,7 @@ class Actor(ActorBase):
         self.hc = None # Hidden and cell layer activations
         self.proj = nn.Linear(hidden_dim, action_dim)
     
-    def forward(self, state, action=None):
-        x, reset_idx = state
+    def forward(self, x, reset_idx, action=None):
         rnn_out, self.hc = iter_over_batch_with_reset(self.net, x, reset_idx, self.hc)
         return self.make_action(self.proj(rnn_out), action)
 
@@ -44,7 +42,6 @@ class Critic(nn.Module):
         self.hc = None # Hidden and cell layer activations
         self.proj = nn.Linear(hidden_dim, 1)
 
-    def forward(self, state):
-        x, reset_idx = state
+    def forward(self, x, reset_idx):
         rnn_out, self.hc = iter_over_batch_with_reset(self.net, x, reset_idx, self.hc)
         return self.proj(rnn_out)

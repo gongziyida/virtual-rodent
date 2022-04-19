@@ -10,9 +10,6 @@ class ModuleBase(nn.Module):
         self.encoders = [encoders[i] for i in self.idx_encoded]
         if len(self.encoders) > 0:
             self.encoders = nn.ModuleList(self.encoders)
-            with torch.no_grad():
-                self.ft_dims = [encoders[i](torch.randn(1, *in_dims[i])).squeeze().data.shape[0]
-                                for i in self.idx_encoded]
 
         self.actor = actor
         self.critic = critic
@@ -48,7 +45,8 @@ class ActorBase(nn.Module):
         self.in_dim = in_dim
         self.action_dim = action_dim
         self.log_scale = nn.Parameter(torch.full((action_dim,), 0.5))
-
+    
+    @torch.jit.ignore
     def make_action(self, loc, action=None):
         '''
         returns
@@ -61,8 +59,11 @@ class ActorBase(nn.Module):
             Shape (T, batch, 1)
         '''
         scale = torch.clamp(torch.exp(self.log_scale), 1e-3, 10)
-        scale = scale.view(*([1] * len(loc.shape[:-1])), *scale.shape)
-        assert len(scale.shape) == len(loc.shape)
+        if len(loc.shape) == 2:
+            scale = scale.unsqueeze(0)
+        elif len(loc.shape) == 3:
+            scale = scale.unsqueeze(0).unsqueeze(0)
+        assert scale is not None
         pi = MultivariateNormal(loc, torch.diag_embed(scale))
         action_ = pi.sample() if action is None else action.detach()
         log_prob = pi.log_prob(action_).unsqueeze(-1)
@@ -71,4 +72,5 @@ class ActorBase(nn.Module):
 
     def forward(self, state, action=None):
         raise NotImplementedError
+
 

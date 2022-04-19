@@ -10,6 +10,8 @@ paths = [
         #'out_mlp_hopper_stand_1E-04',
         #'out_rnn_cheetah_1E-04',
         'out_rnn_gaps_ouch_rodent_1E-04',
+        'out_cpu_rnn_cheetah_1E-04',
+        'out_gpu_rnn_cheetah_1E-04',
         ]
 
 if __name__ == '__main__':
