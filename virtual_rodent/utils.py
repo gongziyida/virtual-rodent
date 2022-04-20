@@ -3,25 +3,6 @@ import numpy as np
 import pandas as pd
 import torch
 
-class Cache:
-    def __init__(self, max_len):
-        self._cache = []
-        self._max_len = max_len
-
-    def add(self, item):
-        self._cache.append(item)
-        if len(self._cache) > self._max_len:
-            self._cache.pop(0)
-
-    def sample(self, num):
-        batch = random.sample(self._cache, num)
-        return batch
-
-    def set_max_len(self, val):
-        self._max_len = val
-
-    def __len__(self):
-        return len(self._cache)
 
 def save_checkpoint(model, epoch, save_path, optimizer=None): 
     state_dict = model.state_dict() if isinstance(model, torch.nn.Module) else model

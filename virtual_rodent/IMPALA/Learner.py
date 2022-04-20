@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 
 from virtual_rodent.network.helper import fetch_reset_idx
-from virtual_rodent.utils import Cache
 from .base import WorkerBase
 
 _ATTRIBUTES = ('vision', 'proprioception', 'action', 'log_policy', 'reward', 'done')
@@ -36,7 +35,6 @@ class Learner(WorkerBase):
         self.entropy_weight = entropy_weight
         self.reduction = reduction
         self.batch_size = batch_size
-        self.batch_cache = Cache(max_len=int(batch_size*20))
         self.episode = 0
         self.max_episodes = max_episodes
         self.not_alone = distributed
@@ -55,7 +53,7 @@ class Learner(WorkerBase):
         else:
             self.scheduler = None
 
-    
+"""
     def fetch_new_sample(self):
         try:
             x = self.queue.get(timeout=0.05)
@@ -89,7 +87,11 @@ class Learner(WorkerBase):
                 returns[k] = torch.stack(returns[k], dim=1)
         assert returns['vision'].shape[:2] == returns['proprioception'].shape[:2]
         return returns
-
+"""
+    def fetch_batch(self):
+        while len(self.queue) < self.batch_size: # Get enough samples first
+            time.sleep(0.1)
+        return self.queue.sample(num=self.batch_size)
 
     def V_trace(self, values, rewards, target_behavior_ratio, reset_idx):
         with torch.no_grad():
@@ -202,7 +204,6 @@ class Learner(WorkerBase):
         with self.training_done.get_lock():
             self.training_done.value += 1
         print(self.ID, 'Learner terminated')
-        del self.batch_cache # Free the storage of variables from the producers
 
 
 

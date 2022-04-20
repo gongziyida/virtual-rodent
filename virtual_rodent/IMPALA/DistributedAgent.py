@@ -7,8 +7,8 @@ from virtual_rodent.network.helper import fetch_reset_idx
 from .base import WorkerBase, TrainingTerminated 
 
 class DistributedAgent(WorkerBase):
-    def __init__(self, ID, DEVICE_INFO, sample_queue, exit, model, state_dict,
-                 env_name, max_step, model_update_freq):
+    def __init__(self, ID, DEVICE_INFO, sample_queue, recorder, exit,
+                 model, state_dict, env_name, max_step, model_update_freq):
         super().__init__(ID, DEVICE_INFO, model, env_name)
         # Constants
         self.max_step = max_step
@@ -17,6 +17,7 @@ class DistributedAgent(WorkerBase):
         # Shared resources
         self.state_dict = state_dict
         self.sample_queue = sample_queue
+        self.recorder = recorder
         self.exit, self.exit_value = exit
 
     def run(self):
@@ -43,6 +44,7 @@ class DistributedAgent(WorkerBase):
                 local_buffer = dict(vision=[], proprioception=[], action=[], 
                                     log_policy=[], reward=[], done=[torch.tensor(True)])
                 step = 0
+                sum_reward = 0
                 while step < self.max_step:
                     # Get state, reward and discount
                     
@@ -62,6 +64,7 @@ class DistributedAgent(WorkerBase):
                     step += 1
                     done = time_step.last()
                     reward = time_step.reward 
+                    sum_reward += reward
 
                     # Record state t, action t, reward t and done t+1
                     local_buffer['vision'].append(vision)
@@ -82,7 +85,6 @@ class DistributedAgent(WorkerBase):
                 for k in local_buffer.keys(): # Stack list of tensor
                     local_buffer[k] = torch.stack(local_buffer[k], dim=0)
 
-                local_buffer['env_name'] = self.env_name
-
-                self.sample_queue.put(local_buffer)
+                self.sample_queue.put(self.ID, local_buffer)
+                self.recorder.put((self.env_name, sum_reward / self.max_step))
         print(self.ID, self.exit.value, self.exit_value, episode)

@@ -36,7 +36,7 @@ class IMPALA_CPU(IMPALABase):
         for k in range(repeat):
             for i, env_i in enumerate(self.env_name):
                 j = k * len(self.env_name) + i
-                simulator = DistributedAgent(j, ('cpu',cpu_per_actor), sample_queue, 
+                simulator = DistributedAgent(j, ('cpu',cpu_per_actor), sample_queue, record_queue,
                                              (training_done, n_learner),
                                              behavior_model, state_dict,
                                              env_i, max_step, model_update_freq,
