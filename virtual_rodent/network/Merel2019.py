@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-from virtual_rodent.network.base import ModuleBase, ActorBase, RNNBase
-# from virtual_rodent.network.helper import iter_over_batch_with_reset
+from virtual_rodent.network.base import ModuleBase, ActorBase
+from virtual_rodent.network.helper import iter_over_batch_with_reset
 
 class MerelModel(ModuleBase):
     def __init__(self, vision_enc, propri_enc, vision_dim, propri_dim, 
@@ -10,8 +10,7 @@ class MerelModel(ModuleBase):
         super().__init__([vision_enc, propri_enc], [vision_dim, propri_dim], 
                          actor, critic, action_dim)
 
-    def forward(self, state, action=None):
-        vision, propri, reset_idx = state
+    def forward(self, vision, propri, reset_idx, action=None):
         v_dim, p_dim = vision.shape, propri.shape
         assert len(v_dim) == 3 or len(v_dim) == 5
         assert len(p_dim) == 1 or len(p_dim) == 3
@@ -44,9 +43,8 @@ class Actor(ActorBase):
         self.hc = None # Hidden and cell layer activations
         self.proj = nn.Linear(hidden_dim, action_dim)
     
-    def forward(self, state, action=None):
-        x, reset_idx = state
-        rnn_out, self.hc = self.iter_over_batch_with_reset(x, reset_idx, self.hc)
+    def forward(self, x, reset_idx, action=None):
+        rnn_out, self.hc = iter_over_batch_with_reset(self.net, x, reset_idx, self.hc)
         return self.make_action(self.proj(rnn_out), action)
 
 
@@ -58,7 +56,6 @@ class Critic(nn.Module):
         self.hc = None # Hidden and cell layer activations
         self.proj = nn.Linear(hidden_dim, 1)
 
-    def forward(self, state):
-        x, reset_idx = state
-        rnn_out, self.hc = self.iter_over_batch_with_reset(x, reset_idx, self.hc)
+    def forward(self, x, reset_idx):
+        rnn_out, self.hc = iter_over_batch_with_reset(self.net, x, reset_idx, self.hc)
         return self.proj(rnn_out), rnn_out
