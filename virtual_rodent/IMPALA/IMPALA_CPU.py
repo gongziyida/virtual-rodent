@@ -23,7 +23,7 @@ class IMPALA_CPU(IMPALABase):
         n_actor = len(self.env_name) * repeat
         if n_actor * cpu_per_actor >= _N_CPU:
             raise ValueError('CPU resource not enough')
-        n_learner = int((_N_CPU - n_actor * cpu_per_actor) // cpu_per_learner)
+        n_learner = int((_N_CPU - 1 - n_actor * cpu_per_actor) // cpu_per_learner)
 
         training_done, sample_queue, state_dict, record_queue = self.shared_training_resources()
 
@@ -56,14 +56,17 @@ class IMPALA_CPU(IMPALABase):
             learner = Learner(i, ('cpu',cpu_per_learner), sample_queue, record_queue, 
                               training_done, self.model, state_dict, p_hat=1, c_hat=1,
                               max_episodes=int(max_episodes//n_learner), batch_size=batch_size,
-                              **learner_params)
+                              distributed=True, **learner_params)
             learner.start()
             learners.append(learner)
 
         recorder.start()
 
         for learner in learners:
+            print('-', end='')
             learner.join()
+
+        print('All learners terminated successfully')
 
         if training_done.value != n_learner:
             print('Learner terminated with error. Kill all processes.')
@@ -72,9 +75,13 @@ class IMPALA_CPU(IMPALABase):
             return
 
         for simulator in simulators:
+            print('+', end='')
             simulator.join()
 
+        print('All simulators terminated successfully')
+
         recorder.join()
+        print('Recorder terminated successfully')
 
         self.model, _ = load_checkpoint(self.model, os.path.join(self.save_dir, 'model.pt'))
 

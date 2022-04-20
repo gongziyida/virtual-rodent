@@ -7,7 +7,7 @@ from virtual_rodent.network.helper import fetch_reset_idx
 from .base import WorkerBase, TrainingTerminated 
 
 class DistributedAgent(WorkerBase):
-    def __init__(self, ID, DEVICE_INFO, sample_queue, exit, model, state_dict
+    def __init__(self, ID, DEVICE_INFO, sample_queue, exit, model, state_dict,
                  env_name, max_step, model_update_freq):
         super().__init__(ID, DEVICE_INFO, model, env_name)
         # Constants
@@ -85,4 +85,4 @@ class DistributedAgent(WorkerBase):
                 local_buffer['env_name'] = self.env_name
 
                 self.sample_queue.put(local_buffer)
-
+        print(self.ID, self.exit.value, self.exit_value, episode)

@@ -25,7 +25,7 @@ class Learner(WorkerBase):
                  max_episodes, p_hat, c_hat,
                  discount=0.99, entropy_bonus=True, clip_gradient=1, batch_size=5, lr=1e-4,
                  actor_weight=1, critic_weight=0.5, entropy_weight=1e-2, reduction='mean', 
-                 lr_scheduler=False, save_window=None):
+                 lr_scheduler=False, distributed=False):
         super().__init__(ID, DEVICE_INFO, model)
         # Constants
         self.discount, self.p_hat, self.c_hat = discount, p_hat, c_hat
@@ -39,6 +39,7 @@ class Learner(WorkerBase):
         self.batch_cache = Cache(max_len=int(batch_size*20))
         self.episode = 0
         self.max_episodes = max_episodes
+        self.not_alone = distributed
 
         # Shared resources
         self.queue = queue
@@ -139,8 +140,11 @@ class Learner(WorkerBase):
         # First batch takes longer to wait. 
         # Do it here for tqdm to estimate the runtime correctly
         batch = self.fetch_batch()
+        if self.not_alone:
+            time.sleep(5) # Make sure every learner should at least get the init batch
 
-        for k in tqdm(range(0, self.max_episodes, self.batch_size), disable=False):
+        for k in tqdm(range(0, self.max_episodes, self.batch_size), 
+                      position=self.ID, disable=False):
             self.optimizer.zero_grad()
 
             vision, propri = batch['vision'], batch['proprioception']
@@ -197,6 +201,7 @@ class Learner(WorkerBase):
 
         with self.training_done.get_lock():
             self.training_done.value += 1
+        print(self.ID, 'Learner terminated')
         del self.batch_cache # Free the storage of variables from the producers
 
 

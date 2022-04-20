@@ -1,6 +1,7 @@
 import os, time, pickle
 import torch
 
+from queue import Empty # Exception
 from torch.multiprocessing import Process
 from virtual_rodent.visualization import video
 from virtual_rodent.utils import save_checkpoint
@@ -45,7 +46,7 @@ class StatsRecorder(Process):
         while self.exit.value != self.exit_value:
             time.sleep(30)
             while not self.queue.empty():
-                x = self.queue.get()
+                x = self.queue.get(timeout=0.1)
                 if type(x) == tuple:
                     self.record_reward(*x)
                 elif type(x) == dict:
