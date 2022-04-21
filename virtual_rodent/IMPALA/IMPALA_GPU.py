@@ -14,15 +14,18 @@ from .Recorder import StatsRecorder, VideoRecorder
 set_start_method('spawn', force=True)
 
 class IMPALA_GPU(IMPALABase):
-    def __init__(self, env_name, model, save_dir):
-        super().__init__(env_name, model, save_dir)
+    def __init__(self, env_name, model, save_dir, vision_dim, propri_dim, action_dim):
+        super().__init__(env_name, model, save_dir, vision_dim, propri_dim, action_dim)
 
     def train(self, max_step, max_episodes, model_update_freq=5, batch_size=10, repeat=1,
               simulator_params={}, learner_params={}):
+
+        self.max_step = max_step
+        self.n_workers = repeat * len(self.env_name)
         training_done, sample_queue, state_dict, record_queue = self.shared_training_resources()
 
         # Processes
-        print('Setting %d simulators...' % (repeat * len(self.env_name)))
+        print('Setting %d simulators...' % self.n_workers)
         simulators = []
         action_traffic = []
         for k in range(repeat):
@@ -39,11 +42,11 @@ class IMPALA_GPU(IMPALABase):
                 action_traffic.append(action_traffic_i)
                 simulators.append(simulator)
 
-        print('Setting actor...')
+        print('Setting worker...')
         behavior_model = copy.deepcopy(self.model)
-        actor = CentralizedAgent(('gpu',(0,)), action_traffic, training_done, 
+        worker = CentralizedAgent(('gpu',(0,)), action_traffic, training_done, 
                     behavior_model, state_dict, batch_size, max_step, model_update_freq)
-        actor.start()
+        worker.start()
 
         time.sleep(3)
 
@@ -62,7 +65,7 @@ class IMPALA_GPU(IMPALABase):
 
         if training_done.value != 1:
             print('Learner terminated with error. Kill all processes.')
-            actor.kill()
+            worker.kill()
             for simulator in simulators:
                 simulator.kill()
             return
@@ -71,7 +74,7 @@ class IMPALA_GPU(IMPALABase):
             action_made.set()
             input_given.set()
 
-        actor.join()
+        worker.join()
 
         for simulator in simulators:
             simulator.join()

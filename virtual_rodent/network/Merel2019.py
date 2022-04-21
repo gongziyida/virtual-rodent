@@ -28,10 +28,10 @@ class MerelModel(ModuleBase):
 
         assert len(ft_emb.shape) == 3 # should have shape (T, batch, embedding)
         
-        value, core_h = self.critic((ft_emb, reset_idx))
+        value, core_h = self.critic(ft_emb, reset_idx)
 
         ft_emb = torch.cat((propri, ft_emb, core_h.detach()), dim=-1)
-        action, log_prob, entropy = self.actor((ft_emb, reset_idx), action)
+        action, log_prob, entropy = self.actor(ft_emb, reset_idx, action)
 
         return value, (action, log_prob, entropy)
 

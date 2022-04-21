@@ -1,8 +1,9 @@
 import os, time
+import tqdm
 import copy
 import numpy as np
 import torch
-from torch.multiprocessing import Queue, Event, set_start_method
+from torch.multiprocessing import Queue, Event, Value, set_start_method
 
 from virtual_rodent.utils import load_checkpoint
 from .base import IMPALABase, _N_CPU
@@ -13,17 +14,17 @@ from .Recorder import StatsRecorder, VideoRecorder
 set_start_method('spawn', force=True)
 
 class IMPALA_CPU(IMPALABase):
-    def __init__(self, env_name, model, save_dir):
-        super().__init__(env_name, model, save_dir)
-        # self.model = torch.jit.script(self.model)
+    def __init__(self, env_name, model, save_dir, vision_dim, propri_dim, action_dim):
+        super().__init__(env_name, model, save_dir, vision_dim, propri_dim, action_dim)
 
     def train(self, max_step, max_episodes, model_update_freq=5, batch_size=10, repeat=1,
-              simulator_params={}, learner_params={}, cpu_per_actor=2, cpu_per_learner=2):
+              simulator_params={}, learner_params={}, cpu_per_worker=2, cpu_per_learner=2):
 
-        n_actor = len(self.env_name) * repeat
-        if n_actor * cpu_per_actor >= _N_CPU:
+        self.max_step = max_step
+        self.n_workers = len(self.env_name) * repeat
+        if self.n_workers * cpu_per_worker >= _N_CPU:
             raise ValueError('CPU resource not enough')
-        n_learner = int((_N_CPU - 1 - n_actor * cpu_per_actor) // cpu_per_learner)
+        n_learners = int((_N_CPU - 3 - self.n_workers * cpu_per_worker) // cpu_per_learner)
 
         training_done, sample_queue, state_dict, record_queue = self.shared_training_resources()
 
@@ -36,8 +37,8 @@ class IMPALA_CPU(IMPALABase):
         for k in range(repeat):
             for i, env_i in enumerate(self.env_name):
                 j = k * len(self.env_name) + i
-                simulator = DistributedAgent(j, ('cpu',cpu_per_actor), sample_queue, record_queue,
-                                             (training_done, n_learner),
+                simulator = DistributedAgent(j, ('cpu',cpu_per_worker), sample_queue, record_queue,
+                                             (training_done, n_learners),
                                              behavior_model, state_dict,
                                              env_i, max_step, model_update_freq,
                                              **simulator_params)
@@ -48,28 +49,36 @@ class IMPALA_CPU(IMPALABase):
 
         self.model.share_memory()
 
-        recorder = StatsRecorder(state_dict, record_queue, (training_done, n_learner), self.save_dir)
+        recorder = StatsRecorder(state_dict, record_queue, (training_done, n_learners), self.save_dir)
 
-        print('Setting %d learners on CPU...' % n_learner)
+        print('Setting %d learners on CPU...' % n_learners)
+        max_episodes_per_learner = int(max_episodes // n_learners)
+        pbar_state = Value('i', 0)
         learners = []
-        for i in range(n_learner):
+        for i in range(n_learners):
             learner = Learner(i, ('cpu',cpu_per_learner), sample_queue, record_queue, 
-                              training_done, self.model, state_dict, p_hat=1, c_hat=1,
-                              max_episodes=int(max_episodes//n_learner), batch_size=batch_size,
+                              training_done, pbar_state, self.model, state_dict, p_hat=1, c_hat=1,
+                              max_episodes=max_episodes_per_learner, batch_size=batch_size,
                               distributed=True, **learner_params)
             learner.start()
             learners.append(learner)
 
         recorder.start()
-
+        """
+        while pbar_state.value == 0:
+            time.sleep(0.1)
+        with tqdm.tqdm(total=max_episodes_per_learner * n_learners) as pbar:
+            while pbar_state.value < max_episodes_per_learner * n_learners:
+                pbar.n = int(pbar_state.value)
+                pbar.refresh()
+                time.sleep(1)
+        """
         for learner in learners:
-            print('-', end='')
             learner.join()
 
-        print('All learners terminated successfully')
-
-        if training_done.value != n_learner:
+        if training_done.value != n_learners:
             print('Learner terminated with error. Kill all processes.')
+            recorder.kill()
             for simulator in simulators:
                 simulator.kill()
             return

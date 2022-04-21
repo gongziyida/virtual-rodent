@@ -20,8 +20,8 @@ def prepare_store(**kwargs):
     return d
 
 class Learner(WorkerBase):
-    def __init__(self, ID, DEVICE_INFO, queue, recorder, training_done, model, state_dict, 
-                 max_episodes, p_hat, c_hat,
+    def __init__(self, ID, DEVICE_INFO, queue, recorder, training_done, pbar_state, 
+                 model, state_dict, max_episodes, p_hat, c_hat,
                  discount=0.99, entropy_bonus=True, clip_gradient=1, batch_size=5, lr=1e-4,
                  actor_weight=1, critic_weight=0.5, entropy_weight=1e-2, reduction='mean', 
                  lr_scheduler=False, distributed=False):
@@ -42,6 +42,7 @@ class Learner(WorkerBase):
         # Shared resources
         self.queue = queue
         self.training_done = training_done
+        self.pbar_state = pbar_state
         self.state_dict = state_dict
         self.recorder = recorder
 
@@ -53,7 +54,7 @@ class Learner(WorkerBase):
         else:
             self.scheduler = None
 
-"""
+    """
     def fetch_new_sample(self):
         try:
             x = self.queue.get(timeout=0.05)
@@ -87,7 +88,7 @@ class Learner(WorkerBase):
                 returns[k] = torch.stack(returns[k], dim=1)
         assert returns['vision'].shape[:2] == returns['proprioception'].shape[:2]
         return returns
-"""
+    """
     def fetch_batch(self):
         while len(self.queue) < self.batch_size: # Get enough samples first
             time.sleep(0.1)
@@ -135,20 +136,22 @@ class Learner(WorkerBase):
             return vtrace.detach(), p.detach(), advantage.detach()
 
 
-    def run(self):
+    def _run(self):
         self.setup()
 
         # (T+1 or T, batch, ...) for tensors, (batch)(T+1 or T)(...) for lists
         # First batch takes longer to wait. 
         # Do it here for tqdm to estimate the runtime correctly
         batch = self.fetch_batch()
+        """
         if self.not_alone:
             time.sleep(5) # Make sure every learner should at least get the init batch
-
+        """
         for k in tqdm(range(0, self.max_episodes, self.batch_size), 
-                      position=self.ID, disable=False):
+                      desc='L%d' % self.ID, position=self.ID, disable=True):
             self.optimizer.zero_grad()
 
+            run_model_time = time.time()
             vision, propri = batch['vision'], batch['proprioception']
             reset_idx = fetch_reset_idx(batch['done'], vision.shape[0], self.batch_size)
             # Output (T+1, batch, 1). Done state included 
@@ -156,8 +159,10 @@ class Learner(WorkerBase):
                                                                  propri=propri, 
                                                                  reset_idx=reset_idx, 
                                                                  action=batch['action'])
+            run_model_time = time.time() - run_model_time
+            run_vtrace_time = time.time()
             # print(log_target_policy)
-            rewards = batch['reward'].unsqueeze(-1) # (T, batch, 1)
+            rewards = batch['reward'] # (T, batch, 1)
 
             # The last action correspond to state T + 2 and is not in the calculation
             log_target_policy = log_target_policy
@@ -165,7 +170,9 @@ class Learner(WorkerBase):
             ratio = torch.exp(log_target_policy - log_behavior_policy)
             
             vtrace, p, advantage = self.V_trace(values, rewards, ratio, reset_idx)
+            run_vtrace_time = time.time() - run_vtrace_time
 
+            loss_time = time.time()
             # Gradient descent for value function (L2). 
             # (T+1, batch, 1) -> (batch,)
             critic_loss = nn.functional.mse_loss(values, vtrace, reduction='none').mean((0, 2)) 
@@ -178,32 +185,63 @@ class Learner(WorkerBase):
 
             total_loss = critic_loss * self.critic_weight + actor_loss * self.actor_weight - \
                          entropy * self.entropy_weight
+            loss_time = time.time() - loss_time
             
+            record_time = time.time()
             self.recorder.put(prepare_store(total_loss=total_loss, actor_loss=actor_loss,
                                             critic_loss=critic_loss, entropy=entropy,
                                             vtrace=vtrace, value=values))
+            record_time = time.time() - record_time
 
+            backward_time = time.time()
             total_loss = total_loss.mean() if self.reduction == 'mean' else total_loss.sum()
             total_loss.backward()
 
             if self.clip_gradient is not None:
                 nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_gradient)
-
+            backward_time = time.time() - backward_time
+            
+            optimizer_time = time.time()
             self.optimizer.step()
             self.model._dummy += 1
             if self.scheduler is not None:
                 self.scheduler.step()
                 aux = [self.scheduler.get_last_lr()] * self.batch_size
+            optimizer_time = time.time() - optimizer_time
 
+            state_dict_time = time.time()
             # CUDA cannot be shared as `load_state_dict()` will raise error when copying between GPUs
             self.state_dict.update(copy.deepcopy(self.model.cpu().state_dict())) 
             self.model = self.model.to(self.device) # .cpu is inplace for nn.module
-            
+            state_dict_time = time.time() - state_dict_time
+            """
+            with self.pbar_state.get_lock():
+                self.pbar_state.value += self.batch_size
+            """
+            fetch_batch_time = time.time()
             batch = self.fetch_batch()
-
+            fetch_batch_time = time.time() - fetch_batch_time
+            print(self.ID,
+                'run_model_time %.3f' % run_model_time,
+                'run_vtrace_time %.3f' % run_vtrace_time,
+                'loss_time %.3f' % loss_time,
+                'record_time %.3f' % record_time,
+                'backward_time %.3f' % backward_time,
+                'optimizer_time %.3f' % optimizer_time,
+                'state_dict_time %.3f' % state_dict_time,
+                'fetch_batch_time %.3f' % fetch_batch_time,
+                sep='\n')
+        
         with self.training_done.get_lock():
             self.training_done.value += 1
         print(self.ID, 'Learner terminated')
 
-
+    def run(self):
+        try:
+            self._run()
+        except:
+            print('Learner %d terminated with error.' % self.ID)
+            with self.training_done.get_lock():
+                self.training_done.value += 1
+            raise
 

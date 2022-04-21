@@ -1,4 +1,4 @@
-import os, time
+import os, time, random
 import copy
 import numpy as np
 import torch
@@ -11,27 +11,27 @@ _N_GPU = torch.cuda.device_count()
 _N_CPU = int(os.environ['SLURM_NTASKS'])
 
 class SampleQueue:
-    def __init__(self, max_len, n_workers, vision_dim, propri_dim, action_dim):
+    def __init__(self, max_len, n_workers, T, vision_dim, propri_dim, action_dim):
         self._max_len = max_len
-        self._n_workers
+        self._n_workers = n_workers
         self._max_len_per_worker = max_len // n_workers
 
-        self._vision_cache = torch.zeros(self._max_len_per_worker, n_workers, *vision_dim,
+        self._vision_cache = torch.zeros(self._max_len_per_worker, n_workers, T, *vision_dim,
                                          dtype=torch.float32)
         self._vision_cache.share_memory_()
-        self._propri_cache = torch.zeros(self._max_len_per_worker, n_workers, *propri_dim,
+        self._propri_cache = torch.zeros(self._max_len_per_worker, n_workers, T, *propri_dim,
                                          dtype=torch.float32)
         self._propri_cache.share_memory_()
-        self._action_cache = torch.zeros(self._max_len_per_worker, n_workers, action_dim,
+        self._action_cache = torch.zeros(self._max_len_per_worker, n_workers, T, action_dim,
                                          dtype=torch.float32)
         self._action_cache.share_memory_()
-        self._reward_cache = torch.zeros(self._max_len_per_worker, n_workers, 1,
+        self._reward_cache = torch.zeros(self._max_len_per_worker, n_workers, T, 1,
                                          dtype=torch.float32)
         self._reward_cache.share_memory_()
-        self._log_policy_cache = torch.zeros(self._max_len_per_worker, n_workers, 1,
+        self._log_policy_cache = torch.zeros(self._max_len_per_worker, n_workers, T, 1,
                                          dtype=torch.float32)
         self._log_policy_cache.share_memory_()
-        self._done_cache = torch.zeros(self._max_len_per_worker, n_workers, 1,
+        self._done_cache = torch.zeros(self._max_len_per_worker, n_workers, T + 1,
                                          dtype=torch.bool)
         self._done_cache.share_memory_()
 
@@ -41,19 +41,23 @@ class SampleQueue:
         self.__num.share_memory_()
 
     def put(self, worker_id, item):
-        b = int()(self.__idx[worker_id] + 1) % self._max_len_per_worker)
-        self._vision_cache[b, worker_id] = item['vision'].detach().cpu()
-        self._propri_cache[b, worker_id] = item['proprioception'].detach().cpu()
-        self._action_cache[b, worker_id] = item['action'].detach().cpu()
-        self._reward_cache[b, worker_id] = item['reward'].detach().cpu()
-        self._log_policy_cache[b, worker_id] = item['log_policy'].detach().cpu()
-        self._done_cache[b, worker_id] = item['done'].detach().cpu()
-        self.__idx[worker_id] = b
+        b = self.__idx[worker_id]
+        assert b >= 0 and b < self._max_len_per_worker
+        self._vision_cache[b, worker_id] = item['vision'].detach().cpu().clone()
+        self._propri_cache[b, worker_id] = item['proprioception'].detach().cpu().clone()
+        self._action_cache[b, worker_id] = item['action'].detach().cpu().clone()
+        self._reward_cache[b, worker_id] = item['reward'].detach().cpu().unsqueeze(-1).clone()
+        self._log_policy_cache[b, worker_id] = item['log_policy'].detach().cpu().clone()
+        assert item['done'].detach().cpu()[0]
+        self._done_cache[b, worker_id] = item['done'].detach().cpu().clone()
+        assert self._done_cache[b, worker_id].sum() >= 1, self._done_cache[b, worker_id]
+        self.__idx[worker_id] = int((b + 1) % self._max_len_per_worker) # Circulate
         self.__num[worker_id] += 1
 
     def sample(self, num):
+        assert (self.__num > 0).all()
         wid = [random.randint(0, self._n_workers - 1) for _ in range(num)] # end inclusive
-        eid = [random.randint(0, self.__num[i] - 1) for i in wid]
+        eid = [random.randint(0, min(self._max_len_per_worker, self.__num[i]) - 1) for i in wid]
         batch = dict(
                 vision=torch.stack([self._vision_cache[eid[i], wid[i]]
                                     for i in range(num)], 1),
@@ -68,6 +72,9 @@ class SampleQueue:
                 done=torch.stack([self._done_cache[eid[i], wid[i]]
                                   for i in range(num)], 1)
             )
+        for i in range(num):
+            a = self._done_cache[eid[i], wid[i]].sum()
+            assert a >= 1, (a, eid[i], wid[i], self.__num[wid[i]], self.__idx[wid[i]])
         return batch
 
     def __len__(self):
@@ -106,8 +113,10 @@ class IMPALABase:
         training_done = Value('I', 0) # 'I' unsigned int
         state_dict = Manager().dict(copy.deepcopy(self.model.state_dict()))
         record_queue = Queue()
-        sample_queue = SampleQueue(10000, self.n_workers,
+        print(1)
+        sample_queue = SampleQueue(1000, self.n_workers, self.max_step,
                                    self.vision_dim, self.propri_dim, self.action_dim)
+        print(2)
         return training_done, sample_queue, state_dict, record_queue
 
 

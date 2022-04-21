@@ -21,16 +21,11 @@ def run(a, lr, batch_size, cpu_per_learner):
     critic = TestModel.Critic(emb_dim)
     model = TestModel.TestModel(propri_enc, [propri_dim], actor, critic, action_dim) 
     # model, _ = load_checkpoint(model, './simple_test_IMPALA_out_%s/model.pt' % a)
-    """
-    import virtual_rodent.network._simple as TestModel
-    actor = TestModel.Actor()
-    critic = TestModel.Critic()
-    model = TestModel.TestModel(actor, critic) 
-    """
-    impala = IMPALA([env], model, './out_cpu_%s_cheetah_%.0E' % (a, lr))
+
+    impala = IMPALA([env], model, './out_cpu_%s_cheetah_%.0E' % (a, lr), 
+                    (1,), (propri_dim,), action_dim)
     
-    # Note repeat should be smaller than the number of CPU cores available - 3
-    impala.train(max_step=300, max_episodes=int(5e5), repeat=15, batch_size=batch_size,
+    impala.train(max_step=300, max_episodes=int(1e4), repeat=2, batch_size=batch_size,
             cpu_per_learner=cpu_per_learner, learner_params={'lr': lr})
     
     # Generate videos
