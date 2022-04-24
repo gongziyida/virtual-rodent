@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.distributions import MultivariateNormal
+from torch.distributed.rpc import RRef
 
 class ModuleBase(nn.Module):
     def __init__(self, encoders, in_dims, actor, critic, action_dim):
@@ -37,6 +38,12 @@ class ModuleBase(nn.Module):
 
     def get_critic(self):
         return self.critic
+
+    def parameters_rref(self):
+        param_rrefs = []
+        for param in self.parameters():
+            param_rrefs.append(RRef(param))
+        return param_rrefs
 
 
 class ActorBase(nn.Module):

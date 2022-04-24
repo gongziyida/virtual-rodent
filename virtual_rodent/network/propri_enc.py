@@ -8,7 +8,7 @@ class MLPEnc(nn.Module):
         dims = [propri_dim, *hidden_dims, emb_dim]
         li = []
         for i in range(len(dims)-2):
-            li += [nn.Linear(dims[i], dims[i+1]), activation_func()]
+            li += [nn.Linear(dims[i], dims[i+1]), activation_func(inplace=False)]
         li.append(nn.Linear(dims[-2], dims[-1]))
         self.enc = nn.Sequential(*li)
 
