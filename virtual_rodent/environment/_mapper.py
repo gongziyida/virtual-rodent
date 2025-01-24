@@ -77,7 +77,7 @@ def __rodent_run_gaps(random_state=None, physics_dt=0.002, ctrl_dt=0.02):
       walker_spawn_position=(5, 0, 0),
       walker_spawn_rotation=0,
       target_velocity=1.0,
-      contact_termination=True,
+      contact_termination=False,
       terminate_at_height=-0.3,
       physics_timestep=physics_dt,
       control_timestep=ctrl_dt)

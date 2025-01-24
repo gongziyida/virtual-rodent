@@ -49,10 +49,12 @@ class Actor(ActorBase):
     def __init__(self, in_dim, action_dim, logit_scale=0, hidden_dim=8):
         super().__init__(in_dim, action_dim, logit_scale)
         self.hidden_dim = hidden_dim
-        self.net = nn.LSTM(in_dim, hidden_dim, batch_first=False, num_layers=3)
+        self.net = nn.LSTM(in_dim, hidden_dim, batch_first=False, num_layers=2)
         self.hc = None # Hidden and cell layer activations
-        self.proj = nn.Linear(hidden_dim, action_dim, bias=False)
-        nn.init.normal_(self.proj.weight, std=0.5/torch.sqrt(torch.tensor(hidden_dim)))
+        self.loc = nn.Linear(hidden_dim, action_dim, bias=False)
+        self.logit_scale = nn.Linear(hidden_dim, action_dim, bias=False)
+        self.logit_scale.weight.data[:] = 0.
+        nn.init.normal_(self.loc.weight, std=0.5/torch.sqrt(torch.tensor(hidden_dim)))
     
     def forward(self, x, hc=None, action=None):
         if hc is None:
@@ -61,7 +63,9 @@ class Actor(ActorBase):
             rnn_out, self.hc = self.net(x)
         else:
             rnn_out, self.hc = self.net(x, hc)
-        return self.make_action(self.proj(rnn_out), action)
+        loc = self.loc(rnn_out)
+        scale = nn.functional.sigmoid(self.logit_scale(rnn_out))/2
+        return self.make_action(loc, scale, action)
 
     def reset_rnn(self):
         self.hc = None

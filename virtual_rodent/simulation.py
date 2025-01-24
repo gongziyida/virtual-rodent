@@ -30,7 +30,7 @@ def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=No
     start_time = time.time()
 
     returns = dict({'cam%d'%i: [] for i in ext_cam})
-    returns.update(dict(vision=[], propri=[], action=[], reward=[], log_prob=[]))
+    returns.update(dict(vision=[], propri=[], action=[], reward=[]))
     
     if reset:
         time_step = env.reset()
@@ -49,7 +49,7 @@ def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=No
         vision = torch.from_numpy(get_vision(time_step)).to(device)
         propri = torch.from_numpy(get_propri(time_step, propri_attr)).to(device)
 
-        _, (action, log_policy, _) = model(vision=vision, propri=propri)
+        _, (action, _, _) = model(vision=vision, propri=propri)
 
         time_step = env.step(np.clip(action.detach().cpu().squeeze().numpy(), 
                                      action_spec.minimum, action_spec.maximum))
@@ -59,7 +59,6 @@ def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=No
         returns['propri'].append(propri)
         returns['action'].append(action)
         returns['reward'].append(torch.tensor(time_step.reward))
-        returns['log_prob'].append(log_policy)
         for i in ext_cam:
             cam = env.physics.render(camera_id=i, 
                     height=ext_cam_size[0], width=ext_cam_size[1])
@@ -71,9 +70,36 @@ def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=No
     return returns
 
 class Worker(mp.Process):
-    def __init__(self, id_, env_name, model, opt, max_episode, max_step, discount, update_period, 
-                 global_episode, global_reward, res_queue, 
-                 vtrace_param=None, ext_cam=(0,), device=torch.device('cpu')):
+    def __init__(self, id_, env_name, model, opt, max_episode, max_step, update_period, 
+                 discount, entropy_weight, global_episode, global_reward, res_queue,
+                 buffer_queue=None, ext_cam=(0,), device=torch.device('cpu')):
+        ''' Simulation workers
+            parameters
+            ----------
+            id_: int
+                Worker id
+            env_name: str
+                Name of the environment. Choices are in virtual_rodent.environment.MAPPER.ENV_NAMES
+            model: nn.Module
+                Target model that takes at least `vision` and `propri` arguments
+            opt: sharedAdam
+            max_episode, max_step: int
+                Maximum numbers of episode and steps per episode
+            update_period: int
+            discound: float
+                Reward discount, between 0 and 1
+            entropy_weight: float
+                Not used if IMPALA
+            global_episode, global_reward: mp.Value
+                For logging the number of episodes done, and the running average of reward
+            res_queue: mp.Queue
+                Store `global_reward.value`s
+            buffer_queue: mp.Queue
+                For IMPALA, transfer the state and action buffer. Default None (A3C)
+            ext_cam: Set
+                Set of external camera ID to record videos
+            device: torch.device
+        '''
         super(Worker, self).__init__()
         self.id = id_
         self.episode, self.reward = global_episode, global_reward
@@ -84,8 +110,9 @@ class Worker(mp.Process):
         self.device = device
         self.max_episode, self.max_step = max_episode, max_step
         self.discount = discount
-        self.vtrace_param = vtrace_param
+        self.buffer_queue = buffer_queue
         self.ext_cam = ext_cam
+        self.entropy_weight = entropy_weight
 
     def run(self):
         print(f'[{os.getpid()}] Start Worker{self.id}')
@@ -99,13 +126,13 @@ class Worker(mp.Process):
             if save:
                 self.save(ret, i_episode)
 
-        self.res_queue.put(None) # necessary to signal the termination of this worker
+        self.res_queue.put(None) # Signal the termination of this worker
 
     def simulate(self, ext_cam=(0,), ext_cam_size=(200, 200)):
         start_time = time.time()
     
         buffer = dict(vision=[], propri=[], action=[], value=[], reward=[], log_prob=[], 
-                      actor_hc=None, critic_hc=None)
+                      entropy=[], actor_hc=None, critic_hc=None)
         ret = {'cam%d'%i: [] for i in ext_cam}
         ret['episode_reward'] = 0
         
@@ -121,8 +148,7 @@ class Worker(mp.Process):
             propri = torch.from_numpy(get_propri(time_step, self.propri_attr))
             vision, propri = vision.to(self.device), propri.to(self.device)
     
-            value, (action, log_prob, _) = self.behavior_model(vision=vision, 
-                                                               propri=propri)
+            value, (action, log_prob, entropy) = self.behavior_model(vision=vision, propri=propri)
     
             time_step = self.env.step(np.clip(action.detach().cpu().squeeze().numpy(), 
                                               action_spec.minimum, action_spec.maximum))
@@ -133,6 +159,7 @@ class Worker(mp.Process):
             buffer['value'].append(value.squeeze())
             buffer['log_prob'].append(log_prob.squeeze())
             buffer['reward'].append(torch.tensor(time_step.reward))
+            buffer['entropy'].append(entropy.squeeze())
             ret['episode_reward'] += buffer['reward'][-1].item()
             for i in ext_cam:
                 cam = self.env.physics.render(camera_id=i, height=ext_cam_size[0], 
@@ -141,6 +168,11 @@ class Worker(mp.Process):
     
             if (step + 1) % self.update_period == 0 or time_step.last():
                 self.update(buffer)
+                # Create a new dict here because otherwise it will cause 
+                # a race condition for IMPALA update
+                buffer = dict(vision=[], propri=[], action=[], value=[], 
+                              reward=[], log_prob=[], entropy=[])
+                buffer['actor_hc'], buffer['critic_hc'] = self.behavior_model.detach_hc()
     
             if time_step.last():
                 break
@@ -156,7 +188,7 @@ class Worker(mp.Process):
         value_losses = [] # list to save critic (value) loss
         returns = [] # list to save the true values
 
-        if self.vtrace_param is None: # original td error
+        if self.buffer_queue is None: # A3C
             # calculate the true value using rewards returned from the environment
             for r in buffer['reward'][::-1]:
                 # calculate the discounted value
@@ -169,59 +201,37 @@ class Worker(mp.Process):
             for log_prob, value, R in zip(buffer['log_prob'], buffer['value'], returns):
                 advantage = R - value.item()
         
-                policy_losses.append(-log_prob.squeeze() * advantage)
+                policy_losses.append(-log_prob * advantage)
                 value_losses.append(F.mse_loss(value, R) / 2)
         
             loss = torch.stack(policy_losses).sum() + torch.stack(value_losses).sum()
+            loss += self.entropy_weight * torch.stack(buffer['entropy']).mean()
         
+            # reset gradients
             self.opt.zero_grad()
+        
+            # perform backprop
             loss.backward()
             for bp, tp in zip(self.behavior_model.parameters(), self.target_model.parameters()):
-                tp.grad = bp.grad
+                if tp.grad is None:
+                    tp.grad = bp.grad
+                else:
+                    tp.grad += bp.grad
+            self.opt.step()
 
-        else: # V-trace in IMAPLA
-            ret = self.target_model(vision=torch.stack(buffer['vision']).unsqueeze(1), 
-                                    propri=torch.stack(buffer['propri']).unsqueeze(1),
-                                    actor_hc=buffer['actor_hc'], critic_hc=buffer['critic_hc'], 
-                                    action=torch.concat(buffer['action']))
-            values, (_, log_target, _) = ret
-            vtrace, p, advantage = self.V_trace(buffer, values, log_target)
-
-            policy_losses = (-log_target.squeeze() * advantage * p).sum()
-            value_losses = F.mse_loss(values, vtrace, reduction='sum') / 2
-            loss = policy_losses + value_losses
-            self.opt.zero_grad()
-            loss.backward()
+        else: # IMAPLA; need to detach
+            buffer['value'] = [] # useless
+            buffer['entropy'] = [] # useless
+            buffer['vision'] = torch.stack(buffer['vision']).detach().unsqueeze(1)
+            buffer['propri'] = torch.stack(buffer['propri']).detach().unsqueeze(1)
+            buffer['action'] = torch.stack(buffer['action']).detach().unsqueeze(1)
+            buffer['log_prob'] = torch.stack(buffer['log_prob']).detach()
+            buffer['reward'] = torch.stack(buffer['reward'])
+            
+            self.buffer_queue.put(buffer)
     
-        self.opt.step()
         self.behavior_model.load_state_dict(self.target_model.state_dict())
-        buffer.update(dict(vision=[], propri=[], action=[], value=[], reward=[], log_prob=[]))
-        buffer['actor_hc'], buffer['critic_hc'] = self.behavior_model.detach_hc()
-
-    def V_trace(self, buffer, values, log_target):
-        with torch.no_grad():
-            # (T, 1, action dim)
-            log_behavior = torch.concat(batch['log_policy'])
-            target_behavior_ratio = torch.exp(log_target - log_behavior)
-            
-            p = torch.clamp(target_behavior_ratio, max=self.vtrace_param['p_max'])
-            c = torch.clamp(target_behavior_ratio, max=self.vtrace_param['c_max'])
-            
-            next_values = torch.zeros_like(values)
-            next_values[:-1] = values[1:]
-            dV = (buffer['reward'] + self.discount * next_values - values) * p
-            
-            vtrace = torch.zeros_like(values)
-            vtrace[-1] = values[-1] + dV[-1] # initial condition
-            for i in range(vtrace.shape[0]-2, -1, -1): # backward
-                correction = self.discount * c[i] * (vtrace[i+1] - values[i+1])
-                vtrace[i] = values[i] + dV[i] + correction
-                
-            advantage = buffer['reward'] - values
-            advantage[:-1] += self.discount * vtrace[1:]
-            
-            return vtrace.detach(), p.detach(), advantage.detach()
-            
+    
     def record(self, reward):
         with self.episode.get_lock():
             self.episode.value += 1

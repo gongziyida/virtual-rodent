@@ -28,8 +28,9 @@ def main(env_name, max_episode, max_step, update_period):
     ext_cam_size = (200, 200)
     global_episode, global_reward = mp.Value('i', 0), mp.Value('d', 0.)
     res_queue = mp.Queue()
+    
     workers = [Worker(i, env_name, target_model, opt, max_episode, max_step, gamma, 
-                      update_period, global_episode, global_reward, res_queue) 
+                      update_period, global_episode, global_reward, res_queue)
                for i in range(2)]
                # for i in range(mp.cpu_count()-2)]
     

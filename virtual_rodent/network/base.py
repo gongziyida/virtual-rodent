@@ -51,26 +51,23 @@ class ActorBase(nn.Module):
         super().__init__()
         self.in_dim = in_dim
         self.action_dim = action_dim
-        self.logit_scale = nn.Parameter(torch.tensor(float(logit_scale)), 
-                                        requires_grad=False)
     
     @torch.jit.ignore
-    def make_action(self, loc, action=None):
+    def make_action(self, loc, scale, action=None):
         '''
         returns
         -------
         action_: torch.tensor
             Shape (T, batch, action_dim)
         log_prob: torch.tensor
-            Shape (T, batch, 1)
+            Shape (T, batch)
         entropy: torch.tensor
-            Shape (T, batch, 1)
+            Shape (T, batch)
         '''
-        scale = nn.functional.sigmoid(self.logit_scale)/2
         pi = Normal(loc, scale)
         action_ = pi.sample() if action is None else action.detach()
-        log_prob = pi.log_prob(action_).unsqueeze(-1)
-        entropy = pi.entropy().unsqueeze(-1)
+        log_prob = pi.log_prob(action_).sum(dim=-1)
+        entropy = pi.entropy().mean(dim=-1)
         return action_, log_prob, entropy
 
     def forward(self, state, action=None):
