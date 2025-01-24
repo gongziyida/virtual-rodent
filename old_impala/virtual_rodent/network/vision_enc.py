@@ -5,7 +5,7 @@ import torchvision.models as models
 class ResNet18Enc(nn.Module):
     def __init__(self, pretrained=True):
         super().__init__()
-        self.enc = nn.Sequential(*list(models.resnet18(weights='IMAGENET1K_V1').children())[:-1],
+        self.enc = nn.Sequential(*list(models.resnet18(pretrained=pretrained).children())[:-1],
                                  nn.Flatten())
         self.dummy_param = nn.Parameter(torch.empty(0)) # For getting data type and device
 

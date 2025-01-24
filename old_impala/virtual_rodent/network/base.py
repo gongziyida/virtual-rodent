@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.distributions import Normal
+from torch.distributions import MultivariateNormal
 from torch.distributed.rpc import RRef
 
 class ModuleBase(nn.Module):
@@ -47,12 +47,11 @@ class ModuleBase(nn.Module):
 
 
 class ActorBase(nn.Module):
-    def __init__(self, in_dim, action_dim, logit_scale=0):
+    def __init__(self, in_dim, action_dim):
         super().__init__()
         self.in_dim = in_dim
         self.action_dim = action_dim
-        self.logit_scale = nn.Parameter(torch.tensor(float(logit_scale)), 
-                                        requires_grad=False)
+        self.log_scale = nn.Parameter(torch.full((action_dim,), 0.5))
     
     @torch.jit.ignore
     def make_action(self, loc, action=None):
@@ -66,8 +65,13 @@ class ActorBase(nn.Module):
         entropy: torch.tensor
             Shape (T, batch, 1)
         '''
-        scale = nn.functional.sigmoid(self.logit_scale)/2
-        pi = Normal(loc, scale)
+        scale = torch.clamp(torch.exp(self.log_scale), 1e-3, 10)
+        if len(loc.shape) == 2:
+            scale = scale.unsqueeze(0)
+        elif len(loc.shape) == 3:
+            scale = scale.unsqueeze(0).unsqueeze(0)
+        assert scale is not None
+        pi = MultivariateNormal(loc, torch.diag_embed(scale))
         action_ = pi.sample() if action is None else action.detach()
         log_prob = pi.log_prob(action_).unsqueeze(-1)
         entropy = pi.entropy().unsqueeze(-1)

@@ -13,8 +13,8 @@ def run(env, lr, batch_size, cpu_per_learner):
     vision_enc = ResNet18Enc()
     vision_emb_dim = vision_enc.get_emb_dim(VISION_DIM)
 
-    propri_emb_dim = 50 # propri_dim
-    propri_enc = MLPEnc(PROPRI_DIM[0], propri_emb_dim, hidden_dims=(100,))
+    propri_emb_dim = 20 # propri_dim
+    propri_enc = MLPEnc(PROPRI_DIM[0], propri_emb_dim, hidden_dims=(50,))
 
     critic_in_dim = vision_emb_dim + propri_emb_dim
     critic = Merel2019.Critic(critic_in_dim)
@@ -44,6 +44,6 @@ if __name__ == '__main__':
      #'built-in bowl', 
      'built-in gaps', 
      #'built-in maze', 
-     'built-in two-touch',
+     # 'built-in two-touch',
     ]
     run(envs, 1e-4, 2, 2)
