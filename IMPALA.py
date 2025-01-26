@@ -135,8 +135,8 @@ def read_hyperparam(param_path):
             v = None
         elif v.isdigit():
             v = int(v)
-        if k == 'n_workers' and v <= 0:
-            v = mp.cpu_count()-1
+            if k == 'n_workers' and v <= 0:
+                v = mp.cpu_count()-1
         kwargs[k] = v
     return kwargs
 
