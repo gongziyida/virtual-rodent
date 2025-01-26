@@ -27,7 +27,11 @@ RODENT_PROPRIOCEPTION_ATTRIBUTES = ('appendages_pos', 'joints_pos', 'joints_vel'
                                     'sensors_gyro', 'sensors_touch', 'world_zaxis')
 
 
-def __rodent_escape_bowl(random_state=None, physics_dt=0.002, ctrl_dt=0.02):
+__DEFAULT_PHYS_DT = 0.002
+__DEFAULT_CTRL_DT = 0.02
+
+def __rodent_escape_bowl(random_state=None, physics_dt=__DEFAULT_PHYS_DT, 
+                         ctrl_dt=__DEFAULT_CTRL_DT):
   """Requires a rodent to climb out of a bowl-shaped terrain."""
 
   # Build a position-controlled rodent walker.
@@ -53,7 +57,8 @@ def __rodent_escape_bowl(random_state=None, physics_dt=0.002, ctrl_dt=0.02):
          RODENT_PROPRIOCEPTION_ATTRIBUTES
 
 
-def __rodent_run_gaps(random_state=None, physics_dt=0.002, ctrl_dt=0.02):
+def __rodent_run_gaps(random_state=None, physics_dt=__DEFAULT_PHYS_DT, 
+                      ctrl_dt=__DEFAULT_CTRL_DT):
   """Requires a rodent to run down a corridor with gaps."""
 
   # Build a position-controlled rodent walker.
@@ -89,7 +94,8 @@ def __rodent_run_gaps(random_state=None, physics_dt=0.002, ctrl_dt=0.02):
          RODENT_PROPRIOCEPTION_ATTRIBUTES
 
 
-def __rodent_maze_forage(random_state=None, physics_dt=0.002, ctrl_dt=0.02):
+def __rodent_maze_forage(random_state=None, physics_dt=__DEFAULT_PHYS_DT, 
+                         ctrl_dt=__DEFAULT_CTRL_DT):
   """Requires a rodent to find all items in a maze."""
 
   # Build a position-controlled rodent walker.
@@ -133,7 +139,8 @@ def __rodent_maze_forage(random_state=None, physics_dt=0.002, ctrl_dt=0.02):
          RODENT_PROPRIOCEPTION_ATTRIBUTES
 
 
-def __rodent_two_touch(random_state=None, physics_dt=0.002, ctrl_dt=0.02):
+def __rodent_two_touch(random_state=None, physics_dt=__DEFAULT_PHYS_DT, 
+                       ctrl_dt=__DEFAULT_CTRL_DT):
   """Requires a rodent to tap an orb, wait an interval, and tap it again."""
 
   # Build a position-controlled rodent walker.

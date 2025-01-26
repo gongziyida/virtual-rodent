@@ -1,4 +1,4 @@
-import os
+import sys, os
 import numpy as np
 import torch
 import torch.optim as optim
@@ -34,8 +34,8 @@ def update_target(buffer, model, opt, discount, p_max, c_max, entropy_weight):
     vtrace, p, advantage = V_trace(buffer, values, log_target, discount, p_max, c_max)
 
     policy_losses = (-log_target * advantage * p).sum()
-    value_losses = F.mse_loss(values, vtrace, reduction='sum')
-    loss = policy_losses + value_losses + entropy_weight * entropy.sum()
+    value_losses = F.mse_loss(values, vtrace, reduction='sum') / 2
+    loss = policy_losses + value_losses - entropy_weight * entropy.sum()
 
     opt.zero_grad()
     loss.backward()
@@ -67,23 +67,26 @@ def V_trace(buffer, values, log_target, discount, p_max, c_max):
         advantage = buffer['reward'] - values
         advantage[:-1] += discount * vtrace[1:]
         
-        return vtrace.detach(), p.detach(), advantage.detach()
+    return vtrace.detach(), p.detach(), advantage.detach()
 
 
 def main(env_name, max_episode, max_step, update_period, n_workers, save_dir,
-         discount=0.99, p_max=1, c_max=1, entropy_weight=0.05):
+         discount=0.99, p_max=10, c_max=2, entropy_weight=0.01, 
+         model_state_dict_path=None):
     target_model = make_model()
+    if model_state_dict_path is not None:
+        target_model.load_state_dict(torch.load(model_state_dict_path, weights_only=True))
     target_model.share_memory()
     opt = SharedAdam(target_model.parameters(), lr=1e-4)  # global optimizer
     
     ext_cam = (0,)
     ext_cam_size = (200, 200)
-    global_episode, global_reward = mp.Value('i', 0), mp.Value('d', 0.)
+    global_episode = mp.Value('i', 0)
     res_queue, buffer_queue = mp.Queue(), mp.Queue()
 
     workers = [Worker(i, env_name, target_model, opt, max_episode, max_step, 
                       update_period, discount, entropy_weight, 
-                      global_episode, global_reward, res_queue, buffer_queue)
+                      global_episode, res_queue, buffer_queue)
                for i in range(n_workers)]
                # for i in range(mp.cpu_count()-2)]
 
@@ -92,6 +95,7 @@ def main(env_name, max_episode, max_step, update_period, n_workers, save_dir,
 
     res = []
     n_workers_done = 0
+    
     with tqdm(total=max_episode) as pbar:
         while n_workers_done < n_workers:
             pbar.update(global_episode.value - pbar.n)
@@ -101,9 +105,14 @@ def main(env_name, max_episode, max_step, update_period, n_workers, save_dir,
             else:
                 n_workers_done += 1
 
-            if not buffer_queue.empty():
-                buffer = buffer_queue.get()
-                update_target(buffer, target_model, opt, discount, p_max, c_max, entropy_weight)
+            end_time = time.time()
+
+            # update periodically
+            if (pbar.n % 5 == 0 and pbar.n > 1) or pbar.n >= max_episode - 1:
+                while not buffer_queue.empty():
+                    buffer = buffer_queue.get()
+                    update_target(buffer, target_model, opt, discount, 
+                                  p_max, c_max, entropy_weight)
 
             end = n_workers_done == n_workers # for convenience
             # save
@@ -116,6 +125,20 @@ def main(env_name, max_episode, max_step, update_period, n_workers, save_dir,
     for w in workers:
         w.join()
 
+def read_hyperparam(param_path):
+    with open(param_path, 'r') as f:
+        txt = f.read().split('\n')
+    kwargs = dict()
+    for t in txt:
+        k, v = t.split('=')
+        if v == 'None':
+            v = None
+        elif v.isdigit():
+            v = int(v)
+        if k == 'n_workers' and v <= 0:
+            v = mp.cpu_count()-1
+        kwargs[k] = v
+    return kwargs
+
 if __name__ == "__main__":
-    main('gaps', max_episode=4000, max_step=210, update_period=30, n_workers=2, 
-         save_dir='./results/')
+    main('gaps', save_dir='./results/', **read_hyperparam('./hyperparam'))

@@ -23,14 +23,21 @@ def get_vision(time_step):
     return vis
 
 
+def fall_on_back(time_step, threshold=0.035):
+    ''' Check if the animal fell on its back
+        If the body height is smaller than or equal to the provided threshold, return True
+    '''
+    return time_step.observation['walker/body_height'] <= threshold
+
+
 def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=None,
              ext_cam=(0,), ext_cam_size=(200, 200)):
-    """Simulate until stop criteron is met
-    """
+    ''' Simulate until stop criteron is met
+    '''
     start_time = time.time()
 
-    returns = dict({'cam%d'%i: [] for i in ext_cam})
-    returns.update(dict(vision=[], propri=[], action=[], reward=[]))
+    returns = dict(vision=[], propri=[], action=[], reward=[], log_prob=[], value=[])
+    returns.update(dict({f'cam{i}': [] for i in ext_cam}))
     
     if reset:
         time_step = env.reset()
@@ -49,7 +56,7 @@ def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=No
         vision = torch.from_numpy(get_vision(time_step)).to(device)
         propri = torch.from_numpy(get_propri(time_step, propri_attr)).to(device)
 
-        _, (action, _, _) = model(vision=vision, propri=propri)
+        value, (action, log_prob, _) = model(vision=vision, propri=propri)
 
         time_step = env.step(np.clip(action.detach().cpu().squeeze().numpy(), 
                                      action_spec.minimum, action_spec.maximum))
@@ -59,10 +66,12 @@ def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=No
         returns['propri'].append(propri)
         returns['action'].append(action)
         returns['reward'].append(torch.tensor(time_step.reward))
+        returns['log_prob'].append(log_prob)
+        returns['value'].append(value)
         for i in ext_cam:
             cam = env.physics.render(camera_id=i, 
                     height=ext_cam_size[0], width=ext_cam_size[1])
-            returns['cam%d'%i].append(cam)
+            returns[f'cam{i}'].append(cam)
 
     end_time = time.time()
     returns['time'] = end_time - start_time
@@ -71,7 +80,7 @@ def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=No
 
 class Worker(mp.Process):
     def __init__(self, id_, env_name, model, opt, max_episode, max_step, update_period, 
-                 discount, entropy_weight, global_episode, global_reward, res_queue,
+                 discount, entropy_weight, global_episode, res_queue,
                  buffer_queue=None, ext_cam=(0,), device=torch.device('cpu')):
         ''' Simulation workers
             parameters
@@ -90,8 +99,8 @@ class Worker(mp.Process):
                 Reward discount, between 0 and 1
             entropy_weight: float
                 Not used if IMPALA
-            global_episode, global_reward: mp.Value
-                For logging the number of episodes done, and the running average of reward
+            global_episode: mp.Value
+                For logging the number of episodes done
             res_queue: mp.Queue
                 Store `global_reward.value`s
             buffer_queue: mp.Queue
@@ -102,7 +111,7 @@ class Worker(mp.Process):
         '''
         super(Worker, self).__init__()
         self.id = id_
-        self.episode, self.reward = global_episode, global_reward
+        self.episode = global_episode
         self.res_queue = res_queue
         self.target_model, self.opt = model, opt
         self.env_name = env_name
@@ -116,24 +125,25 @@ class Worker(mp.Process):
 
     def run(self):
         print(f'[{os.getpid()}] Start Worker{self.id}')
+        os.environ['MUJOCO_GL'] = 'osmesa' # use CPU for simulation
         self.behavior_model = make_model()
         self.env, self.propri_attr = MAPPER[self.env_name]()
         while self.episode.value < self.max_episode:
             i_episode = int(self.episode.value)
             save = i_episode % 50 == 0
             ret = self.simulate(ext_cam=self.ext_cam if save else set())
-            self.record(ret['episode_reward'])
+            self.record(ret['episode_reward'] / self.max_step)
             if save:
                 self.save(ret, i_episode)
 
         self.res_queue.put(None) # Signal the termination of this worker
 
-    def simulate(self, ext_cam=(0,), ext_cam_size=(200, 200)):
+    def simulate(self, ext_cam):
         start_time = time.time()
     
         buffer = dict(vision=[], propri=[], action=[], value=[], reward=[], log_prob=[], 
                       entropy=[], actor_hc=None, critic_hc=None)
-        ret = {'cam%d'%i: [] for i in ext_cam}
+        ret = {f'cam{i}': [] for i in ext_cam}
         ret['episode_reward'] = 0
         
         time_step = self.env.reset()
@@ -152,7 +162,9 @@ class Worker(mp.Process):
     
             time_step = self.env.step(np.clip(action.detach().cpu().squeeze().numpy(), 
                                               action_spec.minimum, action_spec.maximum))
-    
+
+            fell = fall_on_back(time_step)
+            
             buffer['vision'].append(vision)
             buffer['propri'].append(propri)
             buffer['action'].append(action.squeeze())
@@ -162,11 +174,12 @@ class Worker(mp.Process):
             buffer['entropy'].append(entropy.squeeze())
             ret['episode_reward'] += buffer['reward'][-1].item()
             for i in ext_cam:
-                cam = self.env.physics.render(camera_id=i, height=ext_cam_size[0], 
-                                              width=ext_cam_size[1])
-                ret['cam%d'%i].append(cam)
+                cam = self.env.physics.render(camera_id=i, height=200, width=200)
+                ret[f'cam{i}'].append(cam)
     
-            if (step + 1) % self.update_period == 0 or time_step.last():
+            if (step + 1) % self.update_period == 0 or time_step.last() or fell:
+                if len(buffer['reward']) <= 1:
+                    continue
                 self.update(buffer)
                 # Create a new dict here because otherwise it will cause 
                 # a race condition for IMPALA update
@@ -174,7 +187,7 @@ class Worker(mp.Process):
                               reward=[], log_prob=[], entropy=[])
                 buffer['actor_hc'], buffer['critic_hc'] = self.behavior_model.detach_hc()
     
-            if time_step.last():
+            if time_step.last() or fell:
                 break
     
         end_time = time.time()
@@ -202,10 +215,10 @@ class Worker(mp.Process):
                 advantage = R - value.item()
         
                 policy_losses.append(-log_prob * advantage)
-                value_losses.append(F.mse_loss(value, R) / 2)
+                value_losses.append(F.mse_loss(value, R))
         
             loss = torch.stack(policy_losses).sum() + torch.stack(value_losses).sum()
-            loss += self.entropy_weight * torch.stack(buffer['entropy']).mean()
+            loss -= self.entropy_weight * torch.stack(buffer['entropy']).mean()
         
             # reset gradients
             self.opt.zero_grad()
@@ -227,7 +240,10 @@ class Worker(mp.Process):
             buffer['action'] = torch.stack(buffer['action']).detach().unsqueeze(1)
             buffer['log_prob'] = torch.stack(buffer['log_prob']).detach()
             buffer['reward'] = torch.stack(buffer['reward'])
-            
+            # r_std = buffer['reward'].std()
+            # if r_std > 0:
+            #     buffer['reward'] /= r_std
+
             self.buffer_queue.put(buffer)
     
         self.behavior_model.load_state_dict(self.target_model.state_dict())
@@ -235,16 +251,11 @@ class Worker(mp.Process):
     def record(self, reward):
         with self.episode.get_lock():
             self.episode.value += 1
-        with self.reward.get_lock():
-            if self.reward.value == 0.:
-                self.reward.value = reward
-            else:
-                self.reward.value = self.reward.value * 0.99 + reward * 0.01
-        self.res_queue.put(self.reward.value)
+        self.res_queue.put(reward)
 
     def save(self, ret, i_episode):
         for i in self.ext_cam:
             anim = video(ret[f'cam{i}'])
             fname = f'{self.env_name}_w{self.id}_{i_episode}_cam{i}.gif'
             anim.save(os.path.join('./results', fname), writer='pillow')
-            plt.clf()
+            plt.close()

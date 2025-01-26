@@ -48,13 +48,16 @@ class MerelModel(ModuleBase):
 class Actor(ActorBase):
     def __init__(self, in_dim, action_dim, logit_scale=0, hidden_dim=8):
         super().__init__(in_dim, action_dim, logit_scale)
-        self.hidden_dim = hidden_dim
-        self.net = nn.LSTM(in_dim, hidden_dim, batch_first=False, num_layers=2)
+        self.hidden_dim, self.action_dim = hidden_dim, action_dim
+        self.net = nn.LSTM(in_dim, hidden_dim, batch_first=False, num_layers=1)
         self.hc = None # Hidden and cell layer activations
-        self.loc = nn.Linear(hidden_dim, action_dim, bias=False)
-        self.logit_scale = nn.Linear(hidden_dim, action_dim, bias=False)
-        self.logit_scale.weight.data[:] = 0.
-        nn.init.normal_(self.loc.weight, std=0.5/torch.sqrt(torch.tensor(hidden_dim)))
+        self.fc = nn.Sequential(nn.Linear(hidden_dim, 15), nn.ReLU(), nn.Linear(15, 30))
+        
+        w = torch.randn(15, action_dim)
+        w /= torch.norm(w, dim=1, keepdim=True)
+        self.proj = nn.Parameter(w, requires_grad=False)
+        # nn.init.normal_(self.loc.weight, std=1/torch.sqrt(torch.tensor(hidden_dim)))
+        # self.logit_scale = nn.Parameter(torch.zeros(action_dim))
     
     def forward(self, x, hc=None, action=None):
         if hc is None:
@@ -63,9 +66,15 @@ class Actor(ActorBase):
             rnn_out, self.hc = self.net(x)
         else:
             rnn_out, self.hc = self.net(x, hc)
-        loc = self.loc(rnn_out)
-        scale = nn.functional.sigmoid(self.logit_scale(rnn_out))/2
-        return self.make_action(loc, scale, action)
+        aux = self.fc(rnn_out)
+        loc = aux[...,:aux.shape[-1]//2]
+        scale = torch.exp(aux[...,aux.shape[-1]//2:])
+
+        if action is not None:
+            action = action @ self.proj.T # to low dim
+        action, log_prob, entropy = self.make_action(loc, scale, action)
+        action = (action @ self.proj).clamp(-1, 1) # to high dim
+        return action, log_prob, entropy
 
     def reset_rnn(self):
         self.hc = None
