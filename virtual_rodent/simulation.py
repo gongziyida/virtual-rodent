@@ -31,7 +31,7 @@ def fall_on_back(time_step, threshold=0.035):
 
 
 def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=None,
-             ext_cam=(0,), ext_cam_size=(200, 200)):
+             ext_cam=(0,), ext_cam_size=(200, 200), train=False):
     ''' Simulate until stop criteron is met
     '''
     start_time = time.time()
@@ -56,7 +56,7 @@ def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=No
         vision = torch.from_numpy(get_vision(time_step)).to(device)
         propri = torch.from_numpy(get_propri(time_step, propri_attr)).to(device)
 
-        value, (action, log_prob, _) = model(vision=vision, propri=propri)
+        value, (action_raw, action, log_prob, _) = model(vision=vision, propri=propri, train=train)
 
         time_step = env.step(np.clip(action.detach().cpu().squeeze().numpy(), 
                                      action_spec.minimum, action_spec.maximum))
@@ -64,7 +64,7 @@ def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=No
         # Record state t, action t, reward t and done t+1; reward at start is 0
         returns['vision'].append(vision)
         returns['propri'].append(propri)
-        returns['action'].append(action)
+        returns['action'].append(action_raw)
         returns['reward'].append(torch.tensor(time_step.reward))
         returns['log_prob'].append(log_prob)
         returns['value'].append(value)
@@ -127,6 +127,7 @@ class Worker(mp.Process):
         print(f'[{os.getpid()}] Start Worker{self.id}')
         os.environ['MUJOCO_GL'] = 'osmesa' # use CPU for simulation
         self.behavior_model = make_model()
+        self.behavior_model.actor.proj.data[:] = self.target_model.actor.proj.data.clone()
         self.env, self.propri_attr = MAPPER[self.env_name]()
         while self.episode.value < self.max_episode:
             i_episode = int(self.episode.value)
@@ -158,7 +159,8 @@ class Worker(mp.Process):
             propri = torch.from_numpy(get_propri(time_step, self.propri_attr))
             vision, propri = vision.to(self.device), propri.to(self.device)
     
-            value, (action, log_prob, entropy) = self.behavior_model(vision=vision, propri=propri)
+            value, (action_raw, action, log_prob, entropy) = \
+                self.behavior_model(vision=vision, propri=propri)
     
             time_step = self.env.step(np.clip(action.detach().cpu().squeeze().numpy(), 
                                               action_spec.minimum, action_spec.maximum))
@@ -167,7 +169,7 @@ class Worker(mp.Process):
             
             buffer['vision'].append(vision)
             buffer['propri'].append(propri)
-            buffer['action'].append(action.squeeze())
+            buffer['action'].append(action_raw.squeeze())
             buffer['value'].append(value.squeeze())
             buffer['log_prob'].append(log_prob.squeeze())
             buffer['reward'].append(torch.tensor(time_step.reward))

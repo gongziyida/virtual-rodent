@@ -1,5 +1,8 @@
+import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from torch.distributions import Normal
 
 from virtual_rodent.network.base import ModuleBase, ActorBase
 
@@ -13,7 +16,7 @@ class MerelModel(ModuleBase):
         super().__init__([vision_enc, propri_enc], [vision_dim, propri_dim], 
                          actor, critic, action_dim)
 
-    def forward(self, vision, propri, actor_hc=None, critic_hc=None, action=None):
+    def forward(self, vision, propri, actor_hc=None, critic_hc=None, action_raw=None, train=True):
         v_dim, p_dim = vision.shape, propri.shape
         assert len(v_dim) == 3 or len(v_dim) == 5
         assert len(p_dim) == 1 or len(p_dim) == 3
@@ -34,9 +37,9 @@ class MerelModel(ModuleBase):
         value, core_h = self.critic(ft_emb, critic_hc)
 
         ft_emb = torch.cat((propri, ft_emb, core_h.detach()), dim=-1)
-        action, log_prob, entropy = self.actor(ft_emb, actor_hc, action)
+        action_raw, action, log_prob, entropy = self.actor(ft_emb, actor_hc, action_raw, train)
 
-        return value, (action, log_prob, entropy)
+        return value, (action_raw, action, log_prob, entropy)
 
     def reset_rnn(self):
         self.actor.reset_rnn()
@@ -44,22 +47,32 @@ class MerelModel(ModuleBase):
         
     def detach_hc(self):
         return self.actor.detach_hc(), self.critic.detach_hc()
-
-class Actor(ActorBase):
+    
+class Actor(nn.Module):
     def __init__(self, in_dim, action_dim, logit_scale=0, hidden_dim=8):
-        super().__init__(in_dim, action_dim, logit_scale)
-        self.hidden_dim, self.action_dim = hidden_dim, action_dim
+        super().__init__()
+        self.in_dim, self.hidden_dim, self.action_dim = in_dim, hidden_dim, action_dim
         self.net = nn.LSTM(in_dim, hidden_dim, batch_first=False, num_layers=1)
         self.hc = None # Hidden and cell layer activations
-        self.fc = nn.Sequential(nn.Linear(hidden_dim, 15), nn.ReLU(), nn.Linear(15, 30))
         
-        w = torch.randn(15, action_dim)
-        w /= torch.norm(w, dim=1, keepdim=True)
+        dim_, self.n_per_col = 15, 2
+        self.fc = nn.Sequential(nn.Linear(hidden_dim, dim_), nn.ReLU(), nn.Linear(dim_, dim_*2))
+        
+        w = torch.from_numpy(_gen_binary_mat(dim_, action_dim, self.n_per_col)).to(torch.float32)
         self.proj = nn.Parameter(w, requires_grad=False)
-        # nn.init.normal_(self.loc.weight, std=1/torch.sqrt(torch.tensor(hidden_dim)))
         # self.logit_scale = nn.Parameter(torch.zeros(action_dim))
     
-    def forward(self, x, hc=None, action=None):
+    def forward(self, x, hc=None, action_raw=None, train=True):
+        '''
+        returns
+        -------
+        (action_raw, action): torch.tensor
+            Shape (T, batch, action_dim)
+        log_prob: torch.tensor
+            Shape (T, batch)
+        entropy: torch.tensor
+            Shape (T, batch)
+        '''
         if hc is None:
             hc = self.hc
         if hc is None:
@@ -67,14 +80,24 @@ class Actor(ActorBase):
         else:
             rnn_out, self.hc = self.net(x, hc)
         aux = self.fc(rnn_out)
+        
         loc = aux[...,:aux.shape[-1]//2]
-        scale = torch.exp(aux[...,aux.shape[-1]//2:])
-
-        if action is not None:
-            action = action @ self.proj.T # to low dim
-        action, log_prob, entropy = self.make_action(loc, scale, action)
-        action = (action @ self.proj).clamp(-1, 1) # to high dim
-        return action, log_prob, entropy
+        sd = torch.sqrt(torch.tensor(self.n_per_col))
+        if train:
+            scale = F.sigmoid(aux[...,aux.shape[-1]//2:])
+            
+            pi = Normal(loc, scale)
+            entropy = pi.entropy().mean(dim=-1)
+    
+            if action_raw is None:
+                action_raw = pi.sample()
+            correction = torch.log(1 - F.tanh(action_raw)**2 + 1e-8).sum(dim=-1)
+            log_prob = pi.log_prob(action_raw).sum(dim=-1) - correction
+        else:
+            action_raw = loc.detach()
+            log_prob, entropy = None, None
+        action = F.tanh(action_raw) @ self.proj / sd # to high dim
+        return action_raw, action, log_prob, entropy
 
     def reset_rnn(self):
         self.hc = None
@@ -89,7 +112,7 @@ class Critic(nn.Module):
         self.hidden_dim = hidden_dim
         self.net = nn.LSTM(in_dim, hidden_dim, batch_first=False)
         self.hc = None # Hidden and cell layer activations
-        self.proj = nn.Linear(hidden_dim, 1)
+        self.proj = nn.Sequential(nn.Linear(hidden_dim, 1), nn.ReLU())
 
     def forward(self, x,  hc=None):
         if hc is None:
@@ -106,6 +129,24 @@ class Critic(nn.Module):
     def detach_hc(self):
         self.hc = tuple([_.detach() for _ in self.hc])
         return tuple([_.clone() for _ in self.hc])
+
+def _gen_binary_mat(K, N, d):
+    ''' Generate a rank-K K x N binary matrix (K < N) where each column has at most d 1s
+    '''
+    rng = np.random.default_rng()
+    idx = list(range(K))
+    mat = np.zeros((K, N))
+    choosen_tuples = []
+    while np.linalg.matrix_rank(mat) != K: # force full ranks
+        mat[:] = 0
+        for i in range(N):
+            t = tuple(map(int,rng.choice(idx, size=d, replace=False)))
+            while t in choosen_tuples:
+                t = tuple(map(int,rng.choice(idx, size=d, replace=False)))
+            choosen_tuples.append(t)
+            mat[t,i] = 1/np.sqrt(d)
+    assert np.allclose(np.linalg.norm(mat, axis=0), 1)
+    return mat
 
 def make_model():
     vision_enc = ResNet18Enc()

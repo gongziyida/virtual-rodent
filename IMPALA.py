@@ -28,9 +28,9 @@ def update_target(buffer, model, opt, discount, p_max, c_max, entropy_weight):
     # for compatability with neural nets
     ret = model(vision=buffer['vision'], propri=buffer['propri'],
                 actor_hc=buffer['actor_hc'], critic_hc=buffer['critic_hc'], 
-                action=buffer['action'])
+                action_raw=buffer['action'])
     # squeeze for vtrace calculation
-    values, log_target, entropy = ret[0].squeeze(), ret[1][1].squeeze(), ret[1][2].squeeze()
+    values, log_target, entropy = ret[0].squeeze(), ret[1][2].squeeze(), ret[1][3].squeeze()
     vtrace, p, advantage = V_trace(buffer, values, log_target, discount, p_max, c_max)
 
     policy_losses = (-log_target * advantage * p).sum()
@@ -71,7 +71,7 @@ def V_trace(buffer, values, log_target, discount, p_max, c_max):
 
 
 def main(env_name, max_episode, max_step, update_period, n_workers, save_dir,
-         discount=0.99, p_max=10, c_max=2, entropy_weight=0.01, 
+         discount=0.99, p_max=1.5, c_max=1, entropy_weight=0.01, 
          model_state_dict_path=None):
     target_model = make_model()
     if model_state_dict_path is not None:
