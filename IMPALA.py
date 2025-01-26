@@ -133,12 +133,13 @@ def read_hyperparam(param_path):
         if '=' not in t:
             continue
         k, v = t.split('=')
-        if v == 'None':
-            v = None
-        elif v.isdigit():
+        if k == 'model_state_dict_path':
+            if v == 'None':
+                v = None
+        else:
             v = int(v)
             if k == 'n_workers' and v <= 0:
-                v = mp.cpu_count()-1
+                v = int(mp.cpu_count()-1)
         kwargs[k] = v
     return kwargs
 
