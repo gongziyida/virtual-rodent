@@ -130,6 +130,8 @@ def read_hyperparam(param_path):
         txt = f.read().split('\n')
     kwargs = dict()
     for t in txt:
+        if '=' not in t:
+            continue
         k, v = t.split('=')
         if v == 'None':
             v = None
