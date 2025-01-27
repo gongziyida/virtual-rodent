@@ -19,15 +19,19 @@ def get_propri(time_step, propri_attr):
 
 def get_vision(time_step):
     vis = np.moveaxis(time_step.observation['walker/egocentric_camera'], -1, 0) # Channel as axis 0
-    vis = vis.astype(np.float32) / 255
+    vis = vis.astype(np.float32) / 255 # convert to [0, 1]
     return vis
 
 
-def fall_on_back(time_step, threshold=0.035):
+def fall_on_back(time_step, bh_th=0.03, world_th=-0.5):
     ''' Check if the animal fell on its back
-        If the body height is smaller than or equal to the provided threshold, return True
+        If the body height is smaller than or equal to the provided `bh_th`, AND
+        if the world in the walker's frame is smaller than `world_th` < 0 (upside down), 
+        then return True.
+        Notice that the first term alone cannot distinguish falling on back and lying on belly.
     '''
-    return time_step.observation['walker/body_height'] <= threshold
+    return (time_step.observation['walker/body_height'] <= bh_th) and \
+           (time_step.observation['walker/world_zaxis'][2] <= world_th)
 
 
 def simulate(env, model, propri_attr, max_step, device, reset=True, time_step=None,
@@ -142,8 +146,8 @@ class Worker(mp.Process):
     def simulate(self, ext_cam):
         start_time = time.time()
     
-        buffer = dict(vision=[], propri=[], action=[], value=[], reward=[], log_prob=[], 
-                      entropy=[], actor_hc=None, critic_hc=None)
+        buffer = dict(vision=[], propri=[], action=[], value=[], reward=[], 
+                      log_prob=[], entropy=[])
         ret = {f'cam{i}': [] for i in ext_cam}
         ret['episode_reward'] = 0
         
@@ -187,7 +191,6 @@ class Worker(mp.Process):
                 # a race condition for IMPALA update
                 buffer = dict(vision=[], propri=[], action=[], value=[], 
                               reward=[], log_prob=[], entropy=[])
-                buffer['actor_hc'], buffer['critic_hc'] = self.behavior_model.detach_hc()
     
             if time_step.last() or fell:
                 break

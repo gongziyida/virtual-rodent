@@ -10,7 +10,7 @@ class MLPEnc(nn.Module):
         for i in range(len(dims)-2):
             li += [nn.Linear(dims[i], dims[i+1]), activation_func(inplace=False)]
         li.append(nn.Linear(dims[-2], dims[-1]))
-        self.enc = nn.Sequential(*li)
+        self.enc = nn.Sequential(*li, nn.LayerNorm(emb_dim))
 
     def forward(self, x):
         return self.enc(x) # Automatically handle reshape since it's linear

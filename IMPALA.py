@@ -26,21 +26,18 @@ def update_target(buffer, model, opt, discount, p_max, c_max, entropy_weight):
             and `'action'` are T and 1.
     '''
     # for compatability with neural nets
-    ret = model(vision=buffer['vision'], propri=buffer['propri'],
-                actor_hc=buffer['actor_hc'], critic_hc=buffer['critic_hc'], 
-                action_raw=buffer['action'])
+    ret = model(vision=buffer['vision'], propri=buffer['propri'], action_raw=buffer['action'])
     # squeeze for vtrace calculation
     values, log_target, entropy = ret[0].squeeze(), ret[1][2].squeeze(), ret[1][3].squeeze()
     vtrace, p, advantage = V_trace(buffer, values, log_target, discount, p_max, c_max)
 
     policy_losses = (-log_target * advantage * p).sum()
-    value_losses = F.mse_loss(values, vtrace, reduction='sum') / 2
+    value_losses = F.mse_loss(values, vtrace, reduction='sum')
     loss = policy_losses + value_losses - entropy_weight * entropy.sum()
 
     opt.zero_grad()
     loss.backward()
     opt.step()
-    model.detach_hc()
 
 def V_trace(buffer, values, log_target, discount, p_max, c_max):
     ''' Calculate V trace
@@ -49,6 +46,10 @@ def V_trace(buffer, values, log_target, discount, p_max, c_max):
     '''
     with torch.no_grad():
         target_behavior_ratio = torch.exp(log_target - buffer['log_prob'])
+        rewards = buffer['reward']
+        r_std = rewards.std() > 0
+        if r_std > 0:
+            rewards = (rewards - rewards.mean()) / r_std
         
         p = torch.clamp(target_behavior_ratio, max=p_max)
         c = torch.clamp(target_behavior_ratio, max=c_max)
@@ -56,7 +57,7 @@ def V_trace(buffer, values, log_target, discount, p_max, c_max):
         next_values = torch.zeros_like(values)
         next_values[:-1] = values[1:]
         
-        dV = (buffer['reward'] + discount * next_values - values) * p
+        dV = (rewards + discount * next_values - values) * p
         
         vtrace = torch.zeros_like(values)
         vtrace[-1] = values[-1] + dV[-1] # initial condition
@@ -64,20 +65,20 @@ def V_trace(buffer, values, log_target, discount, p_max, c_max):
             correction = discount * c[i] * (vtrace[i+1] - values[i+1])
             vtrace[i] = values[i] + dV[i] + correction
             
-        advantage = buffer['reward'] - values
+        advantage = rewards - values
         advantage[:-1] += discount * vtrace[1:]
         
     return vtrace.detach(), p.detach(), advantage.detach()
 
 
 def main(env_name, max_episode, max_step, update_period, n_workers, save_dir,
-         discount=0.99, p_max=1.5, c_max=1, entropy_weight=0.01, 
+         discount=0.99, p_max=10, c_max=1, entropy_weight=0.01, 
          model_state_dict_path=None):
     target_model = make_model()
     if model_state_dict_path is not None:
         target_model.load_state_dict(torch.load(model_state_dict_path, weights_only=True))
     target_model.share_memory()
-    opt = SharedAdam(target_model.parameters(), lr=1e-4)  # global optimizer
+    opt = SharedAdam(target_model.parameters(), lr=5e-5)  # global optimizer
     
     ext_cam = (0,)
     ext_cam_size = (200, 200)
